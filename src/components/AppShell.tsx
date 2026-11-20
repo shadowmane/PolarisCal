@@ -1,19 +1,27 @@
-import { Button, Toast, Tooltip, useTheme } from "@heroui/react";
+import { Button, Modal, Toast, Tooltip, toast, useTheme } from "@heroui/react";
 import {
   ClipboardCheck,
   Database,
   Gauge,
+  History,
+  KeyRound,
   LayoutDashboard,
   ListChecks,
+  LogOut,
   Moon,
   Settings,
   Sparkle,
   Sun,
+  Users,
   type LucideIcon,
 } from "lucide-react";
+import { useState } from "react";
 import { NavLink, Outlet } from "react-router";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
+import { roleMeta } from "../lib/permissions";
 import { useAsync } from "../lib/useAsync";
+import { ChangePasswordForm } from "./AuthScreens";
 
 interface NavItem {
   to: string;
@@ -27,10 +35,68 @@ const MAIN_NAV: NavItem[] = [
   { to: "/calibrations", label: "Calibration Records", icon: ClipboardCheck },
 ];
 
-const ADMIN_NAV: NavItem[] = [
+const ADMIN_NAV: (NavItem & { adminOnly?: boolean })[] = [
   { to: "/lists", label: "Lists", icon: ListChecks },
+  { to: "/users", label: "Users", icon: Users, adminOnly: true },
+  { to: "/audit", label: "Audit Log", icon: History, adminOnly: true },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
+
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
+}
+
+function UserPanel() {
+  const { user, signOut } = useAuth();
+  const [changing, setChanging] = useState(false);
+  return (
+    <div className="flex items-center gap-2.5 px-2 pb-2">
+      <div className="grid size-8 shrink-0 place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent-soft-foreground">
+        {initials(user.display_name)}
+      </div>
+      <div className="min-w-0 flex-1 leading-tight">
+        <div className="truncate text-sm font-medium">{user.display_name}</div>
+        <div className="truncate text-[11px] text-muted">{roleMeta[user.role].label}</div>
+      </div>
+      <Tooltip delay={300}>
+        <Button isIconOnly size="sm" variant="ghost" aria-label="Change password" onPress={() => setChanging(true)}>
+          <KeyRound className="size-4" />
+        </Button>
+        <Tooltip.Content>Change password</Tooltip.Content>
+      </Tooltip>
+      <Tooltip delay={300}>
+        <Button isIconOnly size="sm" variant="ghost" aria-label="Sign out" onPress={() => void signOut()}>
+          <LogOut className="size-4" />
+        </Button>
+        <Tooltip.Content>Sign out</Tooltip.Content>
+      </Tooltip>
+
+      <Modal>
+        <Modal.Backdrop isOpen={changing} onOpenChange={setChanging}>
+          <Modal.Container size="sm">
+            <Modal.Dialog>
+              <Modal.CloseTrigger />
+              <Modal.Header>
+                <Modal.Heading>Change your password</Modal.Heading>
+              </Modal.Header>
+              <Modal.Body>
+                <div className="p-1">
+                  <ChangePasswordForm
+                    onDone={() => {
+                      setChanging(false);
+                      toast.success("Password changed");
+                    }}
+                  />
+                </div>
+              </Modal.Body>
+            </Modal.Dialog>
+          </Modal.Container>
+        </Modal.Backdrop>
+      </Modal>
+    </div>
+  );
+}
 
 function NavSection({ title, items }: { title?: string; items: NavItem[] }) {
   return (
@@ -99,6 +165,8 @@ function ConnectionStatus() {
 export function AppShell() {
   const { resolvedTheme, setTheme } = useTheme("system");
   const dark = resolvedTheme === "dark";
+  const { can } = useAuth();
+  const adminNav = ADMIN_NAV.filter((item) => !item.adminOnly || can("admin"));
 
   return (
     <div className="flex h-full">
@@ -114,9 +182,12 @@ export function AppShell() {
         </div>
 
         <NavSection items={MAIN_NAV} />
-        <NavSection title="Administration" items={ADMIN_NAV} />
+        <NavSection title="Administration" items={adminNav} />
 
-        <div className="mt-auto flex items-center gap-1 border-t border-separator pt-3">
+        <div className="mt-auto border-t border-separator pt-3">
+          <UserPanel />
+        </div>
+        <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
             <ConnectionStatus />
           </div>

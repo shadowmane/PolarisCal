@@ -3,13 +3,16 @@ import ReactDOM from "react-dom/client";
 import { createHashRouter, RouterProvider } from "react-router";
 import { AppShell } from "./components/AppShell";
 import "./index.css";
+import { AuthProvider } from "./lib/auth";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { AssetFormPage } from "./pages/AssetFormPage";
 import { AssetsPage } from "./pages/AssetsPage";
+import { AuditPage } from "./pages/AuditPage";
 import { CalibrationsPage } from "./pages/CalibrationsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ListsPage } from "./pages/ListsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { UsersPage } from "./pages/UsersPage";
 
 // Hash routing: the app is served from local files, so there is no server to
 // resolve deep links. Every route still works after a reload.
@@ -25,6 +28,8 @@ const router = createHashRouter([
       { path: "assets/:id/edit", element: <AssetFormPage /> },
       { path: "calibrations", element: <CalibrationsPage /> },
       { path: "lists", element: <ListsPage /> },
+      { path: "users", element: <UsersPage /> },
+      { path: "audit", element: <AuditPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },
@@ -32,6 +37,8 @@ const router = createHashRouter([
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <AuthProvider>
+      <RouterProvider router={router} />
+    </AuthProvider>
   </React.StrictMode>,
 );

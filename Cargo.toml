@@ -12,6 +12,7 @@ repository = "https://github.com/shadowmane/PolarisCal"
 polaris-core = { path = "crates/polaris-core" }
 polaris-store = { path = "crates/polaris-store" }
 
+argon2 = "0.6.0"
 async-trait = "0.1.92"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }

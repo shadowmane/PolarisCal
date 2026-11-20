@@ -8,7 +8,7 @@ number, and its condition as received and as returned.
 It runs as a standalone desktop app on a local SQLite database. Support for shared PostgreSQL, SQL
 Server, and MySQL/MariaDB databases is on the roadmap.
 
-> **Status:** early development (Phase 2 of 6). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> **Status:** early development (Phase 3 of 6). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for the design, the business rules, and the roadmap.
 
 ## Tech stack
@@ -42,7 +42,7 @@ npm run tauri dev
 ```
 
 On first launch the app creates its config and database under
-`%APPDATA%\com.polariscal.desktop\`.
+`%APPDATA%\com.polariscal.desktop\` and asks you to create the first administrator account.
 
 To try things without touching that database, point the app at a scratch folder:
 

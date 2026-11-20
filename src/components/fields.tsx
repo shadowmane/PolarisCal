@@ -41,12 +41,16 @@ export function TextInput({
   placeholder,
   autoFocus,
   maxLength,
+  type = "text",
+  autoComplete,
 }: BaseProps & {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   autoFocus?: boolean;
   maxLength?: number;
+  type?: "text" | "password" | "email";
+  autoComplete?: string;
 }) {
   return (
     <TextField
@@ -62,7 +66,7 @@ export function TextInput({
       maxLength={maxLength}
     >
       <Label>{label}</Label>
-      <Input placeholder={placeholder} />
+      <Input placeholder={placeholder} type={type} autoComplete={autoComplete} />
       {description && <Description>{description}</Description>}
       <FieldError>{error}</FieldError>
     </TextField>
@@ -264,7 +268,12 @@ export function SelectInput<K extends string | number>({
     >
       <Label>{label}</Label>
       <Select.Trigger>
-        <Select.Value />
+        {/* Show just the label when closed; descriptions only appear in the open list. */}
+        <Select.Value>
+          {({ isPlaceholder, selectedText, defaultChildren }) =>
+            isPlaceholder ? defaultChildren : selectedText
+          }
+        </Select.Value>
         {allowEmpty && value != null && <Select.ClearButton />}
         <Select.Indicator />
       </Select.Trigger>

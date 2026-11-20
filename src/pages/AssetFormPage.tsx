@@ -5,6 +5,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router";
 import type { AssetKind } from "../bindings/AssetKind";
 import type { IntervalUnit } from "../bindings/IntervalUnit";
 import { ErrorAlert, Loading, PageHeader } from "../components/common";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   DateInput,
   FormSection,
@@ -25,6 +26,7 @@ import {
 } from "../lib/forms";
 import { lookupOptions, useLookups } from "../lib/lookups";
 import { useAsync } from "../lib/useAsync";
+import { useAuth } from "../lib/auth";
 
 /** Which server error key a form field reports under. */
 const ERROR_KEY: Partial<Record<keyof AssetForm, string>> = {
@@ -51,6 +53,8 @@ export function AssetFormPage() {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<ApiError>();
   const [saving, setSaving] = useState(false);
+  const [askReason, setAskReason] = useState(false);
+  const { can } = useAuth();
 
   // Initialize the form once its source data has loaded.
   useEffect(() => {
@@ -71,6 +75,9 @@ export function AssetFormPage() {
     }
   }, [editing, existing.data, lookups.data, form, params]);
 
+  if (!can("edit_records")) {
+    return <ErrorAlert error={{ kind: "forbidden", message: "Your role can't add or edit items." }} />;
+  }
   const loadError = lookups.error ?? existing.error ?? systems.error;
   if (loadError) return <ErrorAlert error={loadError} onRetry={() => window.location.reload()} />;
   if (!form || !lookups.data) return <Loading />;
@@ -85,7 +92,8 @@ export function AssetFormPage() {
     setErrors(({ [errorKey]: _cleared, ...rest }) => rest);
   }
 
-  async function save() {
+  /** Validates locally; edits then ask for a reason before saving. */
+  function submit() {
     if (!form) return;
     setFormError(undefined);
     const converted = formToAssetInput(form);
@@ -93,10 +101,18 @@ export function AssetFormPage() {
       setErrors(converted.errors);
       return;
     }
+    if (editing) setAskReason(true);
+    else void save("");
+  }
+
+  async function save(reason: string) {
+    if (!form) return;
+    const converted = formToAssetInput(form);
+    if (!converted.ok) return;
     setSaving(true);
     try {
       const saved = editing
-        ? await api.updateAsset(assetId, original!.row_version, converted.value)
+        ? await api.updateAsset(assetId, original!.row_version, converted.value, reason)
         : await api.createAsset(converted.value);
       toast.success(editing ? `Saved ${saved.asset_tag}` : `Created ${saved.asset_tag}`);
       navigate(`/assets/${saved.id}`, { replace: true });
@@ -126,7 +142,7 @@ export function AssetFormPage() {
       validationBehavior="aria"
       onSubmit={(e) => {
         e.preventDefault();
-        void save();
+        submit();
       }}
     >
       <PageHeader
@@ -358,6 +374,18 @@ export function AssetFormPage() {
           />
         </FormSection>
       </div>
+      <ConfirmDialog
+        isOpen={askReason}
+        onOpenChange={setAskReason}
+        title={`Save changes to ${original?.asset_tag ?? "this item"}?`}
+        confirmLabel="Save changes"
+        tone="accent"
+        requireReason
+        reasonLabel="Reason for change"
+        onConfirm={(reason) => save(reason)}
+      >
+        Changes to an existing item are recorded in its history along with your reason.
+      </ConfirmDialog>
     </Form>
   );
 }

@@ -15,6 +15,7 @@ import {
   formatDate,
 } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
+import { useAuth } from "../lib/auth";
 
 export function CalibrationsPage() {
   const [showArchived, setShowArchived] = useState(false);
@@ -24,6 +25,8 @@ export function CalibrationsPage() {
   );
   const [dialog, setDialog] = useState<{ open: boolean; record?: CalibrationRecord }>({ open: false });
   const byId = new Map((data ?? []).map((r) => [r.id, r]));
+  const { can } = useAuth();
+  const canEdit = can("edit_records");
 
   return (
     <>
@@ -31,9 +34,11 @@ export function CalibrationsPage() {
         title="Calibration Records"
         description="Every calibration performed, newest first. Saving a record updates the item's last and next calibration dates."
         actions={
-          <Button onPress={() => setDialog({ open: true })}>
-            <Plus className="size-4" /> Record calibration
-          </Button>
+          canEdit && (
+            <Button onPress={() => setDialog({ open: true })}>
+              <Plus className="size-4" /> Record calibration
+            </Button>
+          )
         }
       />
 
@@ -48,10 +53,14 @@ export function CalibrationsPage() {
           <Table.ScrollContainer>
             <Table.Content
               aria-label="Calibration records"
-              onRowAction={(key) => {
-                const record = byId.get(Number(key));
-                if (record) setDialog({ open: true, record });
-              }}
+              onRowAction={
+                canEdit
+                  ? (key) => {
+                      const record = byId.get(Number(key));
+                      if (record) setDialog({ open: true, record });
+                    }
+                  : undefined
+              }
             >
               <Table.Header>
                 <Table.Column isRowHeader>Date</Table.Column>
@@ -67,12 +76,15 @@ export function CalibrationsPage() {
                 items={data}
                 renderEmptyState={() => (
                   <EmptyNote icon={<ClipboardCheck className="size-5" />} title="No calibration records yet">
-                    Use Record calibration to enter the first one.
+                    {canEdit ? "Use Record calibration to enter the first one." : "Nothing has been recorded yet."}
                   </EmptyNote>
                 )}
               >
                 {(r) => (
-                  <Table.Row id={r.id} className={`cursor-pointer ${r.is_archived ? "opacity-55" : ""}`}>
+                  <Table.Row
+                    id={r.id}
+                    className={`${canEdit ? "cursor-pointer" : ""} ${r.is_archived ? "opacity-55" : ""}`}
+                  >
                     <Table.Cell className="font-medium">
                       {formatDate(r.cal_date)}
                       {r.is_archived && <span className="ml-2 text-xs text-muted">(archived)</span>}

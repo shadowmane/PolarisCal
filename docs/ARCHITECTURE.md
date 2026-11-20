@@ -43,9 +43,9 @@ These were agreed on before development started (2026-11-20).
 |---|---|
 | App shell | Tauri 2 (Rust) + React 19 + HeroUI v3 + Tailwind CSS v4. |
 | Databases | Local SQLite file, **or** remote PostgreSQL, Microsoft SQL Server, or MySQL/MariaDB. |
-| Users | Multi-user with logins and roles stored in the database (Phase 3). |
+| Users | Multi-user with logins and roles stored in the database. |
 | Certificates | Files stored on a configured shared folder/UNC path; the database stores the path (Phase 4). |
-| Change history | Full audit trail: who, when, old value, new value. Nothing is hard-deleted (Phase 3). |
+| Change history | Full audit trail: who, when, why, old value, new value. Nothing is hard-deleted. |
 | Hierarchy | A System contains Instruments. Each item keeps its own calibration schedule. |
 | Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists. |
 
@@ -73,7 +73,39 @@ All of these live in `polaris-core` so every backend applies them identically.
 * **Concurrency**: every editable row has a `row_version`. Updates must send the version
   they loaded; if someone else saved first, the update is rejected with a conflict instead
   of silently overwriting.
-* **No hard deletes**: assets and records are archived; list entries are deactivated.
+* **No hard deletes**: assets and records are archived; list entries and user accounts are deactivated.
+
+## Users, roles, and the audit trail
+
+* **First run**: when the database has no accounts, the app shows a setup screen that creates the
+  first Administrator. There are no default credentials.
+* **Roles** (`Role` in `polaris-core`, mirrored by `src/lib/permissions.ts`):
+
+  | Role | Can |
+  |---|---|
+  | Administrator | Everything: users, pick lists, settings, the full audit log |
+  | Technician | Create, edit, and archive Instruments, Systems, and Calibration Records |
+  | Viewer | Read everything, change nothing |
+
+  The UI hides what a role can't do, but every Tauri command checks the role itself
+  (`require` in `src-tauri/src/commands.rs`), so hiding is never the protection.
+* **Passwords** are hashed with Argon2id (random salt per hash). Minimum 10 characters and not the
+  username. Admins can force a change at next sign-in; new accounts default to that. A failed sign-in
+  takes the same time whether or not the username exists.
+* **Sessions** live in memory in the desktop process. Each command re-reads the account, so a user an
+  admin deactivates or demotes is affected on their next action, even on another computer sharing the
+  database.
+* **Auto-lock**: after the admin-configured idle time (default 15 minutes), the app locks and asks for
+  the password. The backend enforces the same timeout, and the UI stays mounted underneath, so unsaved
+  form input survives the lock.
+* **Reasons**: editing, archiving, or restoring an existing Instrument, System, or Calibration Record
+  requires a reason (enforced by every backend through `WriteContext::require_reason`). Creating one
+  doesn't.
+* **Audit trail**: every write inserts an `audit_log` row in the same transaction: user, time, action,
+  subject, reason, and a field-by-field list of old and new values built by `polaris_core::audit`.
+  Sign-ins (including failures), sign-outs, password changes and resets, and settings changes are
+  logged too. In SQLite, triggers reject any `UPDATE` or `DELETE` on the table. Each item's page shows
+  its own history; admins see the full log.
 
 ## Database portability
 
@@ -110,7 +142,7 @@ Settings page instead of crashing.
 
 1. **Foundation** ✅: Tauri/React/HeroUI shell, core model and rules, `Store` trait, SQLite backend and migrations, read-only screens, CI.
 2. **Core data entry** ✅: forms for Instruments/Systems and Calibration Records, list management, detail views with child items and calibration history.
-3. **Users and audit trail**: logins, roles (Admin / Technician / Viewer), field-level change history.
+3. **Users and audit trail** ✅: logins, roles (Admin / Technician / Viewer), reasons for change, field-level change history, idle auto-lock.
 4. **Certificates**: attach files from the configured share to records.
 5. **Remote databases**: PostgreSQL, then MySQL/MariaDB, then SQL Server, plus a connection settings screen.
 6. **Release**: reports and exports, then the installer.

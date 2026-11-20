@@ -95,6 +95,7 @@ export function CalibrationDialog({
   const [formError, setFormError] = useState<ApiError>();
   const [saving, setSaving] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [reason, setReason] = useState("");
 
   // Reset whenever the dialog opens.
   useEffect(() => {
@@ -109,6 +110,7 @@ export function CalibrationDialog({
     );
     setErrors({});
     setFormError(undefined);
+    setReason("");
   }, [isOpen, record, asset]);
 
   function set<K extends keyof CalibrationForm>(key: K, value: CalibrationForm[K]) {
@@ -127,14 +129,18 @@ export function CalibrationDialog({
   async function save() {
     setFormError(undefined);
     const converted = formToCalibrationInput(form);
-    if (!converted.ok) {
-      setErrors(converted.errors);
+    const missingReason = record && !reason.trim();
+    if (!converted.ok || missingReason) {
+      setErrors({
+        ...(converted.ok ? {} : converted.errors),
+        ...(missingReason ? { reason: "Enter a reason for this change." } : {}),
+      });
       return;
     }
     setSaving(true);
     try {
       const saved = record
-        ? await api.updateCalibration(record.id, record.row_version, converted.value)
+        ? await api.updateCalibration(record.id, record.row_version, converted.value, reason)
         : await api.createCalibration(converted.value);
       toast.success(record ? "Calibration record saved" : `Calibration recorded for ${saved.asset_tag}`);
       onSaved(saved);
@@ -146,16 +152,13 @@ export function CalibrationDialog({
     }
   }
 
-  async function archive() {
+  /** Archives or restores; errors propagate so the confirm dialog can show them. */
+  async function archive(why: string) {
     if (!record) return;
-    try {
-      const saved = await api.setCalibrationArchived(record.id, record.row_version, !record.is_archived);
-      toast.success(saved.is_archived ? "Record archived" : "Record restored");
-      onSaved(saved);
-      onOpenChange(false);
-    } catch (e) {
-      handleError(e);
-    }
+    const saved = await api.setCalibrationArchived(record.id, record.row_version, !record.is_archived, why);
+    toast.success(saved.is_archived ? "Record archived" : "Record restored");
+    onSaved(saved);
+    onOpenChange(false);
   }
 
   const fixedAsset = record ? { asset_tag: record.asset_tag } : asset;
@@ -273,6 +276,20 @@ export function CalibrationDialog({
                     onChange={(v) => set("notes", v)}
                     className="md:col-span-2"
                   />
+                  {record && (
+                    <TextAreaInput
+                      label="Reason for change"
+                      value={reason}
+                      onChange={(v) => {
+                        setReason(v);
+                        setErrors(({ reason: _cleared, ...rest }) => rest);
+                      }}
+                      error={errors.reason}
+                      rows={2}
+                      className="md:col-span-2"
+                      description="Required when editing an existing record. Recorded in the audit trail."
+                    />
+                  )}
                 </form>
               </Modal.Body>
               <Modal.Footer>
@@ -281,7 +298,7 @@ export function CalibrationDialog({
                     variant={record.is_archived ? "secondary" : "danger-soft"}
                     className="mr-auto"
                     isDisabled={saving}
-                    onPress={() => (record.is_archived ? void archive() : setConfirmArchive(true))}
+                    onPress={() => setConfirmArchive(true)}
                   >
                     {record.is_archived ? "Restore record" : "Archive record"}
                   </Button>
@@ -301,12 +318,15 @@ export function CalibrationDialog({
       <ConfirmDialog
         isOpen={confirmArchive}
         onOpenChange={setConfirmArchive}
-        title="Archive this calibration record?"
-        confirmLabel="Archive record"
+        title={record?.is_archived ? "Restore this calibration record?" : "Archive this calibration record?"}
+        confirmLabel={record?.is_archived ? "Restore record" : "Archive record"}
+        tone={record?.is_archived ? "accent" : "danger"}
+        requireReason
         onConfirm={archive}
       >
-        The record stays in the history but stops counting toward the item's last and next calibration
-        dates. You can restore it later.
+        {record?.is_archived
+          ? "The record will count toward the item's last and next calibration dates again."
+          : "The record stays in the history but stops counting toward the item's last and next calibration dates. You can restore it later."}
       </ConfirmDialog>
     </>
   );

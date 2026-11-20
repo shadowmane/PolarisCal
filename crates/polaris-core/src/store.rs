@@ -1,64 +1,139 @@
 use async_trait::async_trait;
 
+use crate::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
+use crate::auth::{NewUser, User, UserCredentials, UserUpdate};
 use crate::model::{
-    Asset, AssetFilter, AssetInput, CalibrationFilter, CalibrationInput, CalibrationRecord,
-    LookupInput, LookupItem, LookupKind, StoreInfo,
+    AppSettings, Asset, AssetFilter, AssetInput, CalibrationFilter, CalibrationInput,
+    CalibrationRecord, LookupInput, LookupItem, LookupKind, StoreInfo,
 };
 use crate::{Id, Result};
 
 /// Persistence interface implemented once per database backend.
 ///
-/// Contract every implementation must honor:
-/// * Inputs are normalized/validated with the `normalize` methods in [`crate::model`]
-///   before writing; backends additionally enforce rules that need the database
-///   (parent must be a System, a System with children can't become an Instrument, ...).
-/// * Writes that touch several rows run in one transaction.
+/// Contract every implementation must honor (checked by `polaris-store/tests/store_contract.rs`):
+/// * Inputs are normalized/validated with the `normalize` methods in [`crate::model`] and
+///   [`crate::auth`] before writing; backends additionally enforce rules that need the
+///   database (parent must be a System, a System with children can't become an
+///   Instrument, the last active admin can't be removed, ...).
+/// * Every write runs in one transaction **together with its audit entry**, built with
+///   the snapshot functions in [`crate::audit`]. The audit table is append-only.
+/// * Editing or archiving/restoring an existing asset or calibration record requires a
+///   reason ([`WriteContext::require_reason`]); creating one does not.
 /// * After any change to an asset's calibration records or interval, the asset's
 ///   first/last/next dates are recomputed with [`crate::schedule::derive_dates`].
 /// * `expected_version` is checked against `row_version`; a mismatch returns
 ///   [`crate::Error::Conflict`] and changes nothing.
-/// * Nothing is ever hard-deleted; records are archived instead.
+/// * Nothing is ever hard-deleted; records are archived and accounts deactivated.
+///
+/// Authorization (who may call what) is enforced by the caller, not the store.
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn info(&self) -> Result<StoreInfo>;
+
+    // --- Users and sessions ------------------------------------------------
+
+    async fn user_count(&self) -> Result<i64>;
+    /// Creates the first account as an Admin. Fails with a conflict if any user exists.
+    async fn create_first_admin(&self, input: NewUser) -> Result<User>;
+    /// Looks up an account by username (case-insensitive) for sign-in.
+    async fn credentials(&self, username: &str) -> Result<Option<UserCredentials>>;
+    /// Audits a sign-in attempt; on success also stamps the user's last sign-in time.
+    async fn record_sign_in(&self, attempted_username: &str, user: Option<&User>) -> Result<()>;
+    async fn record_sign_out(&self, actor: &Actor) -> Result<()>;
+    async fn list_users(&self) -> Result<Vec<User>>;
+    async fn get_user(&self, id: Id) -> Result<User>;
+    async fn create_user(&self, ctx: &WriteContext, input: NewUser) -> Result<User>;
+    async fn update_user(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        expected_version: i64,
+        input: UserUpdate,
+    ) -> Result<User>;
+    /// Sets a new password. When `ctx.actor` is the user themself it is a password change
+    /// (and clears `must_change_password`); otherwise an admin reset.
+    async fn set_password(
+        &self,
+        ctx: &WriteContext,
+        user_id: Id,
+        new_password: &str,
+        must_change: bool,
+    ) -> Result<User>;
+
+    // --- Settings ------------------------------------------------------------
+
+    async fn settings(&self) -> Result<AppSettings>;
+    async fn update_settings(
+        &self,
+        ctx: &WriteContext,
+        settings: AppSettings,
+    ) -> Result<AppSettings>;
+
+    // --- Audit trail -----------------------------------------------------------
+
+    async fn list_audit(&self, filter: &AuditFilter) -> Result<Vec<AuditEntry>>;
+
+    // --- Pick lists ------------------------------------------------------------
 
     async fn list_lookups(
         &self,
         kind: LookupKind,
         include_inactive: bool,
     ) -> Result<Vec<LookupItem>>;
-    async fn create_lookup(&self, kind: LookupKind, input: LookupInput) -> Result<LookupItem>;
+    async fn create_lookup(
+        &self,
+        ctx: &WriteContext,
+        kind: LookupKind,
+        input: LookupInput,
+    ) -> Result<LookupItem>;
     async fn update_lookup(
         &self,
+        ctx: &WriteContext,
         kind: LookupKind,
         id: Id,
         input: LookupInput,
     ) -> Result<LookupItem>;
 
+    // --- Instruments and Systems ---------------------------------------------
+
     async fn list_assets(&self, filter: &AssetFilter) -> Result<Vec<Asset>>;
     async fn get_asset(&self, id: Id) -> Result<Asset>;
-    async fn create_asset(&self, input: AssetInput) -> Result<Asset>;
-    async fn update_asset(&self, id: Id, expected_version: i64, input: AssetInput)
-    -> Result<Asset>;
+    async fn create_asset(&self, ctx: &WriteContext, input: AssetInput) -> Result<Asset>;
+    async fn update_asset(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        expected_version: i64,
+        input: AssetInput,
+    ) -> Result<Asset>;
     async fn set_asset_archived(
         &self,
+        ctx: &WriteContext,
         id: Id,
         expected_version: i64,
         archived: bool,
     ) -> Result<Asset>;
 
+    // --- Calibration records ---------------------------------------------------
+
     async fn list_calibrations(&self, filter: &CalibrationFilter)
     -> Result<Vec<CalibrationRecord>>;
     async fn get_calibration(&self, id: Id) -> Result<CalibrationRecord>;
-    async fn create_calibration(&self, input: CalibrationInput) -> Result<CalibrationRecord>;
+    async fn create_calibration(
+        &self,
+        ctx: &WriteContext,
+        input: CalibrationInput,
+    ) -> Result<CalibrationRecord>;
     async fn update_calibration(
         &self,
+        ctx: &WriteContext,
         id: Id,
         expected_version: i64,
         input: CalibrationInput,
     ) -> Result<CalibrationRecord>;
     async fn set_calibration_archived(
         &self,
+        ctx: &WriteContext,
         id: Id,
         expected_version: i64,
         archived: bool,

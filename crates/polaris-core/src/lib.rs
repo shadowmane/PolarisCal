@@ -5,6 +5,8 @@
 //! must apply identically (date derivation, validation, due status) live here so
 //! that backends only translate them into SQL.
 
+pub mod audit;
+pub mod auth;
 pub mod error;
 pub mod model;
 pub mod schedule;

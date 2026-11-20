@@ -95,6 +95,57 @@ text_enum!(
     }
 );
 
+text_enum!(
+    /// What a signed-in user may do. See [`Role::can_edit_records`] and [`Role::is_admin`].
+    Role {
+        /// Everything, including users, pick lists, and settings.
+        Admin => "admin",
+        /// Create, edit, and archive Instruments, Systems, and Calibration Records.
+        Technician => "technician",
+        /// Read-only.
+        Viewer => "viewer",
+    }
+);
+
+impl Role {
+    pub fn can_edit_records(self) -> bool {
+        matches!(self, Role::Admin | Role::Technician)
+    }
+
+    pub fn is_admin(self) -> bool {
+        self == Role::Admin
+    }
+}
+
+text_enum!(
+    /// The kind of event recorded in the audit trail.
+    AuditAction {
+        Create => "create",
+        Update => "update",
+        Archive => "archive",
+        Restore => "restore",
+        SignIn => "sign_in",
+        SignInFailed => "sign_in_failed",
+        SignOut => "sign_out",
+        /// A user changed their own password.
+        PasswordChange => "password_change",
+        /// An administrator set a new password for someone else.
+        PasswordReset => "password_reset",
+    }
+);
+
+text_enum!(
+    /// What an audit entry is about.
+    AuditEntity {
+        Asset => "asset",
+        Calibration => "calibration",
+        Lookup => "lookup",
+        User => "user",
+        Session => "session",
+        Settings => "settings",
+    }
+);
+
 /// How often an item must be calibrated, e.g. 12 months.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -355,6 +406,36 @@ impl LookupInput {
             ));
         }
         Ok(())
+    }
+}
+
+/// Organization-wide settings stored in the database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AppSettings {
+    /// Minutes without activity before the app locks and asks for the password.
+    pub idle_lock_minutes: u32,
+}
+
+impl AppSettings {
+    pub const DEFAULT_IDLE_LOCK_MINUTES: u32 = 15;
+
+    pub fn validate(&self) -> Result<()> {
+        if !(1..=240).contains(&self.idle_lock_minutes) {
+            return Err(Error::validation(
+                "idle_lock_minutes",
+                "Auto-lock must be between 1 and 240 minutes.",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            idle_lock_minutes: Self::DEFAULT_IDLE_LOCK_MINUTES,
+        }
     }
 }
 

@@ -5,15 +5,23 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{Local, NaiveDate, Utc};
+use polaris_core::audit::{
+    Actor, AuditEntry, AuditFilter, FieldChange, NewAuditEntry, WriteContext, asset_snapshot,
+    calibration_snapshot, created, diff, lookup_snapshot, user_snapshot,
+};
+use polaris_core::auth::{
+    NewUser, User, UserCredentials, UserUpdate, check_password_rules, hash_password,
+};
 use polaris_core::model::{
-    Asset, AssetFilter, AssetInput, AssetKind, CalInterval, CalibrationFilter, CalibrationInput,
-    CalibrationRecord, LookupInput, LookupItem, LookupKind, StoreInfo,
+    AppSettings, Asset, AssetFilter, AssetInput, AssetKind, AuditAction, AuditEntity, CalInterval,
+    CalibrationFilter, CalibrationInput, CalibrationRecord, LookupInput, LookupItem, LookupKind,
+    Role, StoreInfo,
 };
 use polaris_core::schedule::{add_interval, derive_dates, due_status};
 use polaris_core::{Error, Id, Result, Store};
 use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteRow,
-    SqliteSynchronous,
+    SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePool, SqlitePoolOptions,
+    SqliteRow, SqliteSynchronous,
 };
 use sqlx::{AssertSqlSafe, Row, Sqlite, Transaction};
 
@@ -379,18 +387,6 @@ async fn due_date_for(
     Ok(interval.and_then(|i| add_interval(cal_date, i)))
 }
 
-async fn calibration_asset_id(tx: &mut Transaction<'static, Sqlite>, id: Id) -> Result<Id> {
-    sqlx::query_scalar("SELECT asset_id FROM calibration_records WHERE id = ?1")
-        .bind(id)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(db)?
-        .ok_or(Error::NotFound {
-            entity: "calibration record",
-            id,
-        })
-}
-
 // ---------------------------------------------------------------------------
 // Lookups
 // ---------------------------------------------------------------------------
@@ -449,25 +445,172 @@ fn lookup_extra(kind: LookupKind, input: &LookupInput) -> Option<bool> {
     }
 }
 
-impl SqliteStore {
-    async fn get_lookup(&self, kind: LookupKind, id: Id) -> Result<LookupItem> {
-        let sql = format!("{} WHERE id = ?1", lookup_select(kind));
-        let row = sqlx::query(AssertSqlSafe(sql))
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(db)?
-            .ok_or(Error::NotFound {
-                entity: "list item",
-                id,
-            })?;
-        map_lookup(&row, kind)
-    }
+// ---------------------------------------------------------------------------
+// Fetch helpers usable inside a transaction or on a pooled connection
+// ---------------------------------------------------------------------------
+
+async fn fetch_asset(conn: &mut SqliteConnection, id: Id) -> Result<Asset> {
+    const SQL: &str = concat!(asset_select!(), " WHERE a.id = ?1");
+    let row = sqlx::query(SQL)
+        .bind(id)
+        .fetch_optional(conn)
+        .await
+        .map_err(db)?
+        .ok_or(Error::NotFound {
+            entity: "asset",
+            id,
+        })?;
+    map_asset(&row, today())
+}
+
+async fn fetch_calibration(conn: &mut SqliteConnection, id: Id) -> Result<CalibrationRecord> {
+    const SQL: &str = concat!(calibration_select!(), " WHERE r.id = ?1");
+    let row = sqlx::query(SQL)
+        .bind(id)
+        .fetch_optional(conn)
+        .await
+        .map_err(db)?
+        .ok_or(Error::NotFound {
+            entity: "calibration record",
+            id,
+        })?;
+    map_calibration(&row)
+}
+
+async fn fetch_lookup(conn: &mut SqliteConnection, kind: LookupKind, id: Id) -> Result<LookupItem> {
+    let sql = format!("{} WHERE id = ?1", lookup_select(kind));
+    let row = sqlx::query(AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(conn)
+        .await
+        .map_err(db)?
+        .ok_or(Error::NotFound {
+            entity: "list item",
+            id,
+        })?;
+    map_lookup(&row, kind)
+}
+
+const USER_COLUMNS: &str =
+    "id, username, display_name, email, role, is_active, must_change_password,
+                            last_sign_in_at, row_version, created_at, updated_at";
+
+fn map_user(row: &SqliteRow) -> Result<User> {
+    Ok(User {
+        id: get(row, "id")?,
+        username: get(row, "username")?,
+        display_name: get(row, "display_name")?,
+        email: get(row, "email")?,
+        role: get::<String>(row, "role")?.parse()?,
+        is_active: get(row, "is_active")?,
+        must_change_password: get(row, "must_change_password")?,
+        last_sign_in_at: get(row, "last_sign_in_at")?,
+        row_version: get(row, "row_version")?,
+        created_at: get(row, "created_at")?,
+        updated_at: get(row, "updated_at")?,
+    })
+}
+
+async fn fetch_user(conn: &mut SqliteConnection, id: Id) -> Result<User> {
+    let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?1");
+    let row = sqlx::query(AssertSqlSafe(sql))
+        .bind(id)
+        .fetch_optional(conn)
+        .await
+        .map_err(db)?
+        .ok_or(Error::NotFound { entity: "user", id })?;
+    map_user(&row)
+}
+
+async fn active_admin_count(conn: &mut SqliteConnection) -> Result<i64> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1")
+        .fetch_one(conn)
+        .await
+        .map_err(db)
+}
+
+async fn insert_user(conn: &mut SqliteConnection, input: &NewUser) -> Result<Id> {
+    let hash = hash_password(&input.password)?;
+    sqlx::query_scalar(
+        "INSERT INTO users (username, display_name, email, role, password_hash,
+                            must_change_password, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) RETURNING id",
+    )
+    .bind(&input.username)
+    .bind(&input.display_name)
+    .bind(&input.email)
+    .bind(input.role.as_str())
+    .bind(hash)
+    .bind(input.must_change_password)
+    .bind(Utc::now())
+    .fetch_one(conn)
+    .await
+    .map_err(|e| {
+        write_err(e, || {
+            format!("The username '{}' is already taken.", input.username)
+        })
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail
+// ---------------------------------------------------------------------------
+
+async fn write_audit(conn: &mut SqliteConnection, entry: NewAuditEntry) -> Result<()> {
+    let changes = serde_json::to_string(&entry.changes)
+        .map_err(|e| Error::Database(format!("could not encode audit changes: {e}")))?;
+    sqlx::query(
+        "INSERT INTO audit_log (occurred_at, user_id, username, action, entity, entity_id,
+                                asset_id, entity_label, reason, changes)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )
+    .bind(Utc::now())
+    .bind(entry.user_id)
+    .bind(&entry.username)
+    .bind(entry.action.as_str())
+    .bind(entry.entity.as_str())
+    .bind(entry.entity_id)
+    .bind(entry.asset_id)
+    .bind(&entry.entity_label)
+    .bind(&entry.reason)
+    .bind(changes)
+    .execute(conn)
+    .await
+    .map_err(db)?;
+    Ok(())
+}
+
+fn map_audit(row: &SqliteRow) -> Result<AuditEntry> {
+    let changes: String = get(row, "changes")?;
+    Ok(AuditEntry {
+        id: get(row, "id")?,
+        occurred_at: get(row, "occurred_at")?,
+        user_id: get(row, "user_id")?,
+        username: get(row, "username")?,
+        action: get::<String>(row, "action")?.parse()?,
+        entity: get::<String>(row, "entity")?.parse()?,
+        entity_id: get(row, "entity_id")?,
+        asset_id: get(row, "asset_id")?,
+        entity_label: get(row, "entity_label")?,
+        reason: get(row, "reason")?,
+        changes: serde_json::from_str::<Vec<FieldChange>>(&changes)
+            .map_err(|e| Error::Database(format!("bad audit changes: {e}")))?,
+    })
+}
+
+fn lookup_label(item: &LookupItem) -> String {
+    format!("{}: {}", item.kind, item.name)
 }
 
 // ---------------------------------------------------------------------------
 // Store implementation
 // ---------------------------------------------------------------------------
+
+impl SqliteStore {
+    async fn conn(&self) -> Result<sqlx::pool::PoolConnection<Sqlite>> {
+        self.pool.acquire().await.map_err(db)
+    }
+}
 
 #[async_trait]
 impl Store for SqliteStore {
@@ -497,6 +640,324 @@ impl Store for SqliteStore {
         })
     }
 
+    // --- Users and sessions ------------------------------------------------
+
+    async fn user_count(&self) -> Result<i64> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db)
+    }
+
+    async fn create_first_admin(&self, mut input: NewUser) -> Result<User> {
+        input.role = Role::Admin;
+        input.must_change_password = false;
+        input.normalize()?;
+        let mut tx = self.begin().await?;
+        let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+        if existing > 0 {
+            return Err(Error::Conflict(
+                "PolarisCal has already been set up. Sign in instead.".into(),
+            ));
+        }
+        let id = insert_user(&mut tx, &input).await?;
+        let user = fetch_user(&mut tx, id).await?;
+        let ctx = WriteContext::new(
+            Actor {
+                user_id: id,
+                username: user.username.clone(),
+            },
+            None,
+        );
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(&ctx, AuditAction::Create, AuditEntity::User)
+                .subject(id, &user.username)
+                .changes(created(&user_snapshot(&user))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(user)
+    }
+
+    async fn credentials(&self, username: &str) -> Result<Option<UserCredentials>> {
+        let sql = format!(
+            "SELECT {USER_COLUMNS}, password_hash FROM users WHERE username = ?1 COLLATE NOCASE"
+        );
+        let row = sqlx::query(AssertSqlSafe(sql))
+            .bind(username.trim())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?;
+        row.map(|r| {
+            Ok(UserCredentials {
+                user: map_user(&r)?,
+                password_hash: get(&r, "password_hash")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn record_sign_in(&self, attempted_username: &str, user: Option<&User>) -> Result<()> {
+        let mut tx = self.begin().await?;
+        let entry = match user {
+            Some(u) => {
+                sqlx::query("UPDATE users SET last_sign_in_at = ?2 WHERE id = ?1")
+                    .bind(u.id)
+                    .bind(Utc::now())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?;
+                NewAuditEntry {
+                    user_id: Some(u.id),
+                    username: u.username.clone(),
+                    action: AuditAction::SignIn,
+                    entity: AuditEntity::Session,
+                    entity_id: Some(u.id),
+                    asset_id: None,
+                    entity_label: Some(u.username.clone()),
+                    reason: None,
+                    changes: vec![],
+                }
+            }
+            None => NewAuditEntry {
+                user_id: None,
+                username: attempted_username.trim().chars().take(64).collect(),
+                action: AuditAction::SignInFailed,
+                entity: AuditEntity::Session,
+                entity_id: None,
+                asset_id: None,
+                entity_label: None,
+                reason: None,
+                changes: vec![],
+            },
+        };
+        write_audit(&mut tx, entry).await?;
+        tx.commit().await.map_err(db)
+    }
+
+    async fn record_sign_out(&self, actor: &Actor) -> Result<()> {
+        let mut conn = self.conn().await?;
+        let ctx = WriteContext::new(actor.clone(), None);
+        write_audit(
+            &mut conn,
+            NewAuditEntry::by(&ctx, AuditAction::SignOut, AuditEntity::Session)
+                .subject(actor.user_id, &actor.username),
+        )
+        .await
+    }
+
+    async fn list_users(&self) -> Result<Vec<User>> {
+        let sql = format!(
+            "SELECT {USER_COLUMNS} FROM users ORDER BY is_active DESC, display_name COLLATE NOCASE"
+        );
+        sqlx::query(AssertSqlSafe(sql))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?
+            .iter()
+            .map(map_user)
+            .collect()
+    }
+
+    async fn get_user(&self, id: Id) -> Result<User> {
+        fetch_user(&mut *self.conn().await?, id).await
+    }
+
+    async fn create_user(&self, ctx: &WriteContext, mut input: NewUser) -> Result<User> {
+        input.normalize()?;
+        let mut tx = self.begin().await?;
+        let id = insert_user(&mut tx, &input).await?;
+        let user = fetch_user(&mut tx, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Create, AuditEntity::User)
+                .subject(id, &user.username)
+                .changes(created(&user_snapshot(&user))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(user)
+    }
+
+    async fn update_user(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        expected_version: i64,
+        mut input: UserUpdate,
+    ) -> Result<User> {
+        input.normalize()?;
+        let mut tx = self.begin().await?;
+        let before = fetch_user(&mut tx, id).await?;
+
+        if id == ctx.actor.user_id && !input.is_active {
+            return Err(Error::validation(
+                "is_active",
+                "You can't deactivate your own account.",
+            ));
+        }
+        let loses_admin = before.role == Role::Admin
+            && before.is_active
+            && (input.role != Role::Admin || !input.is_active);
+        if loses_admin && active_admin_count(&mut tx).await? <= 1 {
+            return Err(Error::validation(
+                "role",
+                "This is the only active administrator. Make someone else an administrator first.",
+            ));
+        }
+
+        let result = sqlx::query(
+            "UPDATE users SET display_name = ?3, email = ?4, role = ?5, is_active = ?6,
+                              updated_at = ?7, row_version = row_version + 1
+             WHERE id = ?1 AND row_version = ?2",
+        )
+        .bind(id)
+        .bind(expected_version)
+        .bind(&input.display_name)
+        .bind(&input.email)
+        .bind(input.role.as_str())
+        .bind(input.is_active)
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        if result.rows_affected() == 0 {
+            return Err(missing_or_stale(&mut tx, "users", "user", id).await);
+        }
+        let after = fetch_user(&mut tx, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::User)
+                .subject(id, &after.username)
+                .changes(diff(&user_snapshot(&before), &user_snapshot(&after))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(after)
+    }
+
+    async fn set_password(
+        &self,
+        ctx: &WriteContext,
+        user_id: Id,
+        new_password: &str,
+        must_change: bool,
+    ) -> Result<User> {
+        let mut tx = self.begin().await?;
+        let before = fetch_user(&mut tx, user_id).await?;
+        check_password_rules(&before.username, new_password)?;
+        let own = ctx.actor.user_id == user_id;
+        let must_change = !own && must_change;
+        sqlx::query(
+            "UPDATE users SET password_hash = ?2, must_change_password = ?3, updated_at = ?4,
+                              row_version = row_version + 1
+             WHERE id = ?1",
+        )
+        .bind(user_id)
+        .bind(hash_password(new_password)?)
+        .bind(must_change)
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        let after = fetch_user(&mut tx, user_id).await?;
+        let action = if own {
+            AuditAction::PasswordChange
+        } else {
+            AuditAction::PasswordReset
+        };
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, action, AuditEntity::User)
+                .subject(user_id, &after.username)
+                .changes(diff(&user_snapshot(&before), &user_snapshot(&after))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(after)
+    }
+
+    // --- Settings ------------------------------------------------------------
+
+    async fn settings(&self) -> Result<AppSettings> {
+        let value: Option<String> =
+            sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'idle_lock_minutes'")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db)?;
+        let idle_lock_minutes = value
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(AppSettings::DEFAULT_IDLE_LOCK_MINUTES);
+        Ok(AppSettings { idle_lock_minutes })
+    }
+
+    async fn update_settings(
+        &self,
+        ctx: &WriteContext,
+        settings: AppSettings,
+    ) -> Result<AppSettings> {
+        settings.validate()?;
+        let before = self.settings().await?;
+        let mut tx = self.begin().await?;
+        sqlx::query(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('idle_lock_minutes', ?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        )
+        .bind(settings.idle_lock_minutes.to_string())
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        if before != settings {
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Settings).changes(vec![
+                    FieldChange {
+                        field: "Auto-lock after (minutes)".into(),
+                        old: Some(before.idle_lock_minutes.to_string()),
+                        new: Some(settings.idle_lock_minutes.to_string()),
+                    },
+                ]),
+            )
+            .await?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(settings)
+    }
+
+    // --- Audit trail -----------------------------------------------------------
+
+    async fn list_audit(&self, filter: &AuditFilter) -> Result<Vec<AuditEntry>> {
+        sqlx::query(
+            "SELECT id, occurred_at, user_id, username, action, entity, entity_id, asset_id,
+                    entity_label, reason, changes
+             FROM audit_log
+             WHERE (?1 IS NULL OR asset_id = ?1)
+               AND (?2 IS NULL OR entity = ?2)
+               AND (?3 IS NULL OR user_id = ?3)
+               AND (?4 IS NULL OR id < ?4)
+             ORDER BY id DESC
+             LIMIT ?5",
+        )
+        .bind(filter.asset_id)
+        .bind(filter.entity.map(AuditEntity::as_str))
+        .bind(filter.user_id)
+        .bind(filter.before_id)
+        .bind(filter.effective_limit())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db)?
+        .iter()
+        .map(map_audit)
+        .collect()
+    }
+
+    // --- Pick lists ------------------------------------------------------------
+
     async fn list_lookups(
         &self,
         kind: LookupKind,
@@ -516,7 +977,12 @@ impl Store for SqliteStore {
             .collect()
     }
 
-    async fn create_lookup(&self, kind: LookupKind, mut input: LookupInput) -> Result<LookupItem> {
+    async fn create_lookup(
+        &self,
+        ctx: &WriteContext,
+        kind: LookupKind,
+        mut input: LookupInput,
+    ) -> Result<LookupItem> {
         input.normalize()?;
         let (table, extra_col) = lookup_table(kind);
         let extra = lookup_extra(kind, &input);
@@ -530,6 +996,7 @@ impl Store for SqliteStore {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?5) RETURNING id"
             ),
         };
+        let mut tx = self.begin().await?;
         let mut query = sqlx::query_scalar(AssertSqlSafe(sql))
             .bind(&input.name)
             .bind(&input.description)
@@ -540,14 +1007,24 @@ impl Store for SqliteStore {
             query = query.bind(value);
         }
         let id: Id = query
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(|e| write_err(e, || format!("'{}' is already in this list.", input.name)))?;
-        self.get_lookup(kind, id).await
+        let item = fetch_lookup(&mut tx, kind, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Create, AuditEntity::Lookup)
+                .subject(id, lookup_label(&item))
+                .changes(created(&lookup_snapshot(&item))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(item)
     }
 
     async fn update_lookup(
         &self,
+        ctx: &WriteContext,
         kind: LookupKind,
         id: Id,
         mut input: LookupInput,
@@ -561,6 +1038,8 @@ impl Store for SqliteStore {
              SET name = ?2, description = ?3, is_active = ?4, sort_order = ?5, updated_at = ?6{extra_set}
              WHERE id = ?1"
         );
+        let mut tx = self.begin().await?;
+        let before = fetch_lookup(&mut tx, kind, id).await?;
         let mut query = sqlx::query(AssertSqlSafe(sql))
             .bind(id)
             .bind(&input.name)
@@ -571,18 +1050,23 @@ impl Store for SqliteStore {
         if let Some(value) = extra {
             query = query.bind(value);
         }
-        let result = query
-            .execute(&self.pool)
+        query
+            .execute(&mut *tx)
             .await
             .map_err(|e| write_err(e, || format!("'{}' is already in this list.", input.name)))?;
-        if result.rows_affected() == 0 {
-            return Err(Error::NotFound {
-                entity: "list item",
-                id,
-            });
-        }
-        self.get_lookup(kind, id).await
+        let after = fetch_lookup(&mut tx, kind, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Lookup)
+                .subject(id, lookup_label(&after))
+                .changes(diff(&lookup_snapshot(&before), &lookup_snapshot(&after))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(after)
     }
+
+    // --- Instruments and Systems ---------------------------------------------
 
     async fn list_assets(&self, filter: &AssetFilter) -> Result<Vec<Asset>> {
         const SQL: &str = concat!(
@@ -618,20 +1102,10 @@ impl Store for SqliteStore {
     }
 
     async fn get_asset(&self, id: Id) -> Result<Asset> {
-        const SQL: &str = concat!(asset_select!(), " WHERE a.id = ?1");
-        let row = sqlx::query(SQL)
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(db)?
-            .ok_or(Error::NotFound {
-                entity: "asset",
-                id,
-            })?;
-        map_asset(&row, today())
+        fetch_asset(&mut *self.conn().await?, id).await
     }
 
-    async fn create_asset(&self, mut input: AssetInput) -> Result<Asset> {
+    async fn create_asset(&self, ctx: &WriteContext, mut input: AssetInput) -> Result<Asset> {
         input.normalize()?;
         let mut tx = self.begin().await?;
         check_hierarchy(&mut tx, None, &input).await?;
@@ -677,19 +1151,31 @@ impl Store for SqliteStore {
         .await
         .map_err(|e| write_err(e, || format!("Asset tag '{}' is already in use.", input.asset_tag)))?;
 
+        let asset = fetch_asset(&mut tx, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Create, AuditEntity::Asset)
+                .subject(id, &asset.asset_tag)
+                .asset(id)
+                .changes(created(&asset_snapshot(&asset))),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
-        self.get_asset(id).await
+        Ok(asset)
     }
 
     async fn update_asset(
         &self,
+        ctx: &WriteContext,
         id: Id,
         expected_version: i64,
         mut input: AssetInput,
     ) -> Result<Asset> {
         input.normalize()?;
+        ctx.require_reason()?;
         let mut tx = self.begin().await?;
         check_hierarchy(&mut tx, Some(id), &input).await?;
+        let before = fetch_asset(&mut tx, id).await?;
 
         let result = sqlx::query(
             "UPDATE assets SET
@@ -734,16 +1220,27 @@ impl Store for SqliteStore {
             return Err(missing_or_stale(&mut tx, "assets", "asset", id).await);
         }
         recompute_asset_dates(&mut tx, id).await?;
+        let after = fetch_asset(&mut tx, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Asset)
+                .subject(id, &after.asset_tag)
+                .asset(id)
+                .changes(diff(&asset_snapshot(&before), &asset_snapshot(&after))),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
-        self.get_asset(id).await
+        Ok(after)
     }
 
     async fn set_asset_archived(
         &self,
+        ctx: &WriteContext,
         id: Id,
         expected_version: i64,
         archived: bool,
     ) -> Result<Asset> {
+        ctx.require_reason()?;
         let mut tx = self.begin().await?;
         if archived {
             let children: i64 = sqlx::query_scalar(
@@ -762,6 +1259,7 @@ impl Store for SqliteStore {
                 ));
             }
         }
+        let before = fetch_asset(&mut tx, id).await?;
         let result = sqlx::query(
             "UPDATE assets SET is_archived = ?3, updated_at = ?4, row_version = row_version + 1
              WHERE id = ?1 AND row_version = ?2",
@@ -776,9 +1274,25 @@ impl Store for SqliteStore {
         if result.rows_affected() == 0 {
             return Err(missing_or_stale(&mut tx, "assets", "asset", id).await);
         }
+        let after = fetch_asset(&mut tx, id).await?;
+        let action = if archived {
+            AuditAction::Archive
+        } else {
+            AuditAction::Restore
+        };
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, action, AuditEntity::Asset)
+                .subject(id, &after.asset_tag)
+                .asset(id)
+                .changes(diff(&asset_snapshot(&before), &asset_snapshot(&after))),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
-        self.get_asset(id).await
+        Ok(after)
     }
+
+    // --- Calibration records ---------------------------------------------------
 
     async fn list_calibrations(
         &self,
@@ -801,20 +1315,14 @@ impl Store for SqliteStore {
     }
 
     async fn get_calibration(&self, id: Id) -> Result<CalibrationRecord> {
-        const SQL: &str = concat!(calibration_select!(), " WHERE r.id = ?1");
-        let row = sqlx::query(SQL)
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(db)?
-            .ok_or(Error::NotFound {
-                entity: "calibration record",
-                id,
-            })?;
-        map_calibration(&row)
+        fetch_calibration(&mut *self.conn().await?, id).await
     }
 
-    async fn create_calibration(&self, mut input: CalibrationInput) -> Result<CalibrationRecord> {
+    async fn create_calibration(
+        &self,
+        ctx: &WriteContext,
+        mut input: CalibrationInput,
+    ) -> Result<CalibrationRecord> {
         input.normalize(today())?;
         let mut tx = self.begin().await?;
         let next_due = due_date_for(&mut tx, input.asset_id, input.cal_date).await?;
@@ -842,20 +1350,31 @@ impl Store for SqliteStore {
         .map_err(|e| write_err(e, || "This calibration record already exists.".into()))?;
 
         recompute_asset_dates(&mut tx, input.asset_id).await?;
+        let record = fetch_calibration(&mut tx, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Create, AuditEntity::Calibration)
+                .subject(id, format!("{} on {}", record.asset_tag, record.cal_date))
+                .asset(record.asset_id)
+                .changes(created(&calibration_snapshot(&record))),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
-        self.get_calibration(id).await
+        Ok(record)
     }
 
     async fn update_calibration(
         &self,
+        ctx: &WriteContext,
         id: Id,
         expected_version: i64,
         mut input: CalibrationInput,
     ) -> Result<CalibrationRecord> {
         input.normalize(today())?;
+        ctx.require_reason()?;
         let mut tx = self.begin().await?;
-        let existing_asset = calibration_asset_id(&mut tx, id).await?;
-        if existing_asset != input.asset_id {
+        let before = fetch_calibration(&mut tx, id).await?;
+        if before.asset_id != input.asset_id {
             return Err(Error::validation(
                 "asset_id",
                 "A calibration record cannot be moved to a different item. Archive it and create a new one.",
@@ -892,18 +1411,32 @@ impl Store for SqliteStore {
             );
         }
         recompute_asset_dates(&mut tx, input.asset_id).await?;
+        let after = fetch_calibration(&mut tx, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Calibration)
+                .subject(id, format!("{} on {}", after.asset_tag, after.cal_date))
+                .asset(after.asset_id)
+                .changes(diff(
+                    &calibration_snapshot(&before),
+                    &calibration_snapshot(&after),
+                )),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
-        self.get_calibration(id).await
+        Ok(after)
     }
 
     async fn set_calibration_archived(
         &self,
+        ctx: &WriteContext,
         id: Id,
         expected_version: i64,
         archived: bool,
     ) -> Result<CalibrationRecord> {
+        ctx.require_reason()?;
         let mut tx = self.begin().await?;
-        let asset_id = calibration_asset_id(&mut tx, id).await?;
+        let before = fetch_calibration(&mut tx, id).await?;
         let result = sqlx::query(
             "UPDATE calibration_records SET is_archived = ?3, updated_at = ?4, row_version = row_version + 1
              WHERE id = ?1 AND row_version = ?2",
@@ -920,8 +1453,25 @@ impl Store for SqliteStore {
                 missing_or_stale(&mut tx, "calibration_records", "calibration record", id).await,
             );
         }
-        recompute_asset_dates(&mut tx, asset_id).await?;
+        recompute_asset_dates(&mut tx, before.asset_id).await?;
+        let after = fetch_calibration(&mut tx, id).await?;
+        let action = if archived {
+            AuditAction::Archive
+        } else {
+            AuditAction::Restore
+        };
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, action, AuditEntity::Calibration)
+                .subject(id, format!("{} on {}", after.asset_tag, after.cal_date))
+                .asset(after.asset_id)
+                .changes(diff(
+                    &calibration_snapshot(&before),
+                    &calibration_snapshot(&after),
+                )),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
-        self.get_calibration(id).await
+        Ok(after)
     }
 }

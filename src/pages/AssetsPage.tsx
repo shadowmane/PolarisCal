@@ -1,6 +1,7 @@
 import { Button, SearchField, Table, Tabs } from "@heroui/react";
 import { Boxes, Gauge, Plus } from "lucide-react";
 import { useNavigate } from "react-router";
+import { useAuth } from "../lib/auth";
 import { useDeferredValue, useState } from "react";
 import type { AssetKind } from "../bindings/AssetKind";
 import { ToggleSwitch } from "../components/fields";
@@ -16,6 +17,7 @@ export function AssetsPage() {
   const [kind, setKind] = useState<KindTab>("all");
   const [showArchived, setShowArchived] = useState(false);
   const navigate = useNavigate();
+  const { can } = useAuth();
   const query = useDeferredValue(search);
   const { data, error, loading, reload } = useAsync(
     () =>
@@ -33,6 +35,7 @@ export function AssetsPage() {
         title="Instruments & Systems"
         description="Everything under calibration control. Systems group the instruments they contain."
         actions={
+          can("edit_records") && (
           <>
             <Button variant="secondary" onPress={() => navigate("/assets/new?kind=system")}>
               <Boxes className="size-4" /> New System
@@ -41,6 +44,7 @@ export function AssetsPage() {
               <Plus className="size-4" /> New Instrument
             </Button>
           </>
+          )
         }
       />
 
@@ -101,7 +105,9 @@ export function AssetsPage() {
                   >
                     {query
                       ? `Nothing matches “${query}”.`
-                      : "Use New Instrument or New System to add the first one."}
+                      : can("edit_records")
+                        ? "Use New Instrument or New System to add the first one."
+                        : "Nothing has been added yet."}
                   </EmptyNote>
                 )}
               >

@@ -1,3 +1,5 @@
+import type { AuditAction } from "../bindings/AuditAction";
+import type { AuditEntity } from "../bindings/AuditEntity";
 import type { CalInterval } from "../bindings/CalInterval";
 import type { ConditionReceived } from "../bindings/ConditionReceived";
 import type { ConditionReturned } from "../bindings/ConditionReturned";
@@ -66,3 +68,33 @@ export const LOOKUP_KINDS: LookupKind[] = [
   "provider",
   "status",
 ];
+
+const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+/** Formats an RFC 3339 timestamp in local time. */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return EMPTY;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : dateTimeFormat.format(d);
+}
+
+export const auditActionMeta: Record<AuditAction, { label: string; color: ChipColor }> = {
+  create: { label: "Created", color: "success" },
+  update: { label: "Edited", color: "accent" },
+  archive: { label: "Archived", color: "warning" },
+  restore: { label: "Restored", color: "accent" },
+  sign_in: { label: "Signed in", color: "default" },
+  sign_in_failed: { label: "Sign-in failed", color: "danger" },
+  sign_out: { label: "Signed out", color: "default" },
+  password_change: { label: "Password changed", color: "default" },
+  password_reset: { label: "Password reset", color: "warning" },
+};
+
+export const auditEntityLabel: Record<AuditEntity, string> = {
+  asset: "Item",
+  calibration: "Calibration",
+  lookup: "List entry",
+  user: "User",
+  session: "Session",
+  settings: "Settings",
+};

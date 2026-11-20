@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Chip, Table, toast } from "@heroui/react";
-import { ArrowLeft, Boxes, ClipboardCheck, Gauge, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Pencil, Plus } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { Asset } from "../bindings/Asset";
@@ -8,7 +8,9 @@ import { CalibrationDialog } from "../components/CalibrationDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ToggleSwitch } from "../components/fields";
 import { EmptyNote, ErrorAlert, Loading, StatusChip } from "../components/common";
-import { ApiError, api } from "../lib/api";
+import { AuditList } from "../components/AuditList";
+import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import {
   conditionReceivedMeta,
   conditionReturnedMeta,
@@ -31,6 +33,7 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
 
 function ChildrenCard({ system }: { system: Asset }) {
   const navigate = useNavigate();
+  const { can } = useAuth();
   const children = useAsync(() => api.listAssets({ parent_id: system.id }), [system.id, system.row_version]);
   return (
     <Card>
@@ -39,7 +42,7 @@ function ChildrenCard({ system }: { system: Asset }) {
           <Card.Title>Contained instruments</Card.Title>
           <Card.Description>Each instrument keeps its own calibration schedule.</Card.Description>
         </div>
-        {!system.is_archived && (
+        {!system.is_archived && can("edit_records") && (
           <Button
             size="sm"
             variant="secondary"
@@ -104,6 +107,8 @@ function HistoryCard({
   onAdd: () => void;
 }) {
   const [showArchived, setShowArchived] = useState(false);
+  const { can } = useAuth();
+  const canEdit = can("edit_records");
   const records = useAsync(
     () => api.listCalibrations({ asset_id: asset.id, include_archived: showArchived }),
     [asset.id, showArchived, version],
@@ -115,11 +120,13 @@ function HistoryCard({
       <Card.Header className="flex-row items-center justify-between">
         <div>
           <Card.Title>Calibration history</Card.Title>
-          <Card.Description>Newest first. Select a record to view or edit it.</Card.Description>
+          <Card.Description>
+            {canEdit ? "Newest first. Select a record to view or edit it." : "Newest first."}
+          </Card.Description>
         </div>
         <div className="flex items-center gap-4">
           <ToggleSwitch label="Show archived" isSelected={showArchived} onChange={setShowArchived} />
-          {!asset.is_archived && (
+          {!asset.is_archived && canEdit && (
             <Button size="sm" variant="secondary" onPress={onAdd}>
               <Plus className="size-4" /> Record calibration
             </Button>
@@ -132,10 +139,14 @@ function HistoryCard({
           <Table.ScrollContainer>
             <Table.Content
               aria-label="Calibration history"
-              onRowAction={(key) => {
-                const r = byId.get(Number(key));
-                if (r) onEdit(r);
-              }}
+              onRowAction={
+                canEdit
+                  ? (key) => {
+                      const r = byId.get(Number(key));
+                      if (r) onEdit(r);
+                    }
+                  : undefined
+              }
             >
               <Table.Header>
                 <Table.Column isRowHeader>Date</Table.Column>
@@ -153,7 +164,10 @@ function HistoryCard({
                 )}
               >
                 {(r) => (
-                  <Table.Row id={r.id} className={`cursor-pointer ${r.is_archived ? "opacity-55" : ""}`}>
+                  <Table.Row
+                    id={r.id}
+                    className={`${canEdit ? "cursor-pointer" : ""} ${r.is_archived ? "opacity-55" : ""}`}
+                  >
                     <Table.Cell className="font-medium">
                       {formatDate(r.cal_date)}
                       {r.is_archived && <span className="ml-2 text-xs text-muted">(archived)</span>}
@@ -186,6 +200,38 @@ function HistoryCard({
   );
 }
 
+function ChangeHistoryCard({ asset, version }: { asset: Asset; version: number }) {
+  const [limit, setLimit] = useState(20);
+  const entries = useAsync(
+    () => api.listAudit({ asset_id: asset.id, limit: limit + 1 }),
+    [asset.id, asset.row_version, version, limit],
+  );
+  const shown = (entries.data ?? []).slice(0, limit);
+  const more = (entries.data?.length ?? 0) > limit;
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>Change history</Card.Title>
+        <Card.Description>Every change to this item and its calibration records: who, when, and why.</Card.Description>
+      </Card.Header>
+      <Card.Content>
+        {entries.error && <ErrorAlert error={entries.error} onRetry={entries.reload} />}
+        {entries.data && shown.length === 0 && (
+          <EmptyNote icon={<History className="size-5" />} title="No recorded changes">
+            Items created before change tracking was added have no history yet.
+          </EmptyNote>
+        )}
+        <AuditList entries={shown} showSubject={false} />
+        {more && (
+          <Button size="sm" variant="ghost" className="mt-3" onPress={() => setLimit((l) => l + 30)}>
+            Show older changes
+          </Button>
+        )}
+      </Card.Content>
+    </Card>
+  );
+}
+
 export function AssetDetailPage() {
   const { id } = useParams();
   const assetId = Number(id);
@@ -194,7 +240,8 @@ export function AssetDetailPage() {
 
   const [dialog, setDialog] = useState<{ open: boolean; record?: CalibrationRecord }>({ open: false });
   const [confirmArchive, setConfirmArchive] = useState(false);
-  const [archiveError, setArchiveError] = useState<ApiError>();
+  const { can } = useAuth();
+  const canEdit = can("edit_records");
   // Bumped after any save so the history and children re-load.
   const [version, setVersion] = useState(0);
 
@@ -205,15 +252,12 @@ export function AssetDetailPage() {
   const due = dueStatusMeta[asset.due_status];
   const isSystem = asset.kind === "system";
 
-  async function toggleArchived() {
-    setArchiveError(undefined);
-    try {
-      const saved = await api.setAssetArchived(asset!.id, asset!.row_version, !asset!.is_archived);
-      toast.success(saved.is_archived ? `${saved.asset_tag} archived` : `${saved.asset_tag} restored`);
-      reload();
-    } catch (e) {
-      setArchiveError(e instanceof ApiError ? e : new ApiError("database", String(e)));
-    }
+  /** Errors propagate to the confirm dialog, which shows them. */
+  async function toggleArchived(reason: string) {
+    const saved = await api.setAssetArchived(asset!.id, asset!.row_version, !asset!.is_archived, reason);
+    toast.success(saved.is_archived ? `${saved.asset_tag} archived` : `${saved.asset_tag} restored`);
+    setVersion((v) => v + 1);
+    reload();
   }
 
   return (
@@ -239,7 +283,7 @@ export function AssetDetailPage() {
             </div>
             <p className="mt-1 text-sm text-muted">{asset.description}</p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className={`flex shrink-0 items-center gap-2 ${canEdit ? "" : "hidden"}`}>
             {!asset.is_archived && (
               <Button onPress={() => setDialog({ open: true })}>
                 <ClipboardCheck className="size-4" /> Record calibration
@@ -250,7 +294,7 @@ export function AssetDetailPage() {
             </Button>
             <Button
               variant={asset.is_archived ? "secondary" : "ghost"}
-              onPress={() => (asset.is_archived ? void toggleArchived() : setConfirmArchive(true))}
+              onPress={() => setConfirmArchive(true)}
             >
               {asset.is_archived ? "Restore" : "Archive"}
             </Button>
@@ -269,7 +313,6 @@ export function AssetDetailPage() {
           </Alert.Content>
         </Alert>
       )}
-      {archiveError && <ErrorAlert error={archiveError} />}
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[3fr_2fr]">
         <Card>
@@ -334,6 +377,8 @@ export function AssetDetailPage() {
         onEdit={(record) => setDialog({ open: true, record })}
       />
 
+      <ChangeHistoryCard asset={asset} version={version} />
+
       <CalibrationDialog
         isOpen={dialog.open}
         onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
@@ -348,12 +393,15 @@ export function AssetDetailPage() {
       <ConfirmDialog
         isOpen={confirmArchive}
         onOpenChange={setConfirmArchive}
-        title={`Archive ${asset.asset_tag}?`}
-        confirmLabel="Archive"
+        title={asset.is_archived ? `Restore ${asset.asset_tag}?` : `Archive ${asset.asset_tag}?`}
+        confirmLabel={asset.is_archived ? "Restore" : "Archive"}
+        tone={asset.is_archived ? "accent" : "danger"}
+        requireReason
         onConfirm={toggleArchived}
       >
-        Archived items are hidden from lists and due tracking. Their calibration history is kept, and you can
-        restore them at any time.
+        {asset.is_archived
+          ? "The item returns to lists and due tracking."
+          : "Archived items are hidden from lists and due tracking. Their calibration history is kept, and you can restore them at any time."}
       </ConfirmDialog>
     </div>
   );
