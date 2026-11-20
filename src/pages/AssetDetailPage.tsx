@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Chip, Table, toast } from "@heroui/react";
-import { ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Paperclip, Pencil, Plus } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { Asset } from "../bindings/Asset";
@@ -8,6 +8,7 @@ import { CalibrationDialog } from "../components/CalibrationDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ToggleSwitch } from "../components/fields";
 import { EmptyNote, ErrorAlert, Loading, StatusChip } from "../components/common";
+import { AttachmentsPanel } from "../components/Attachments";
 import { AuditList } from "../components/AuditList";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -176,7 +177,20 @@ function HistoryCard({
                       {r.provider_name}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
                     </Table.Cell>
-                    <Table.Cell>{r.certificate_number ?? EMPTY}</Table.Cell>
+                    <Table.Cell>
+                      <span className="inline-flex items-center gap-1.5">
+                        {r.certificate_number ?? EMPTY}
+                        {r.attachment_count > 0 && (
+                          <span
+                            className="inline-flex items-center gap-0.5 text-xs text-muted"
+                            title={`${r.attachment_count} file(s) attached`}
+                          >
+                            <Paperclip className="size-3.5" />
+                            {r.attachment_count}
+                          </span>
+                        )}
+                      </span>
+                    </Table.Cell>
                     <Table.Cell>
                       <StatusChip color={conditionReceivedMeta[r.condition_received].color}>
                         {conditionReceivedMeta[r.condition_received].label}
@@ -376,6 +390,23 @@ export function AssetDetailPage() {
         onAdd={() => setDialog({ open: true })}
         onEdit={(record) => setDialog({ open: true, record })}
       />
+
+      <Card>
+        <Card.Header>
+          <Card.Title>Files</Card.Title>
+          <Card.Description>
+            Certificates, manuals, and photos for this item and its calibration records. Selecting a file opens it.
+          </Card.Description>
+        </Card.Header>
+        <Card.Content>
+          <AttachmentsPanel
+            key={version}
+            assetId={asset.id}
+            readOnly={asset.is_archived}
+            onChanged={() => setVersion((v) => v + 1)}
+          />
+        </Card.Content>
+      </Card>
 
       <ChangeHistoryCard asset={asset} version={version} />
 

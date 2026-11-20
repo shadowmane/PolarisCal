@@ -44,7 +44,7 @@ These were agreed on before development started (2026-11-20).
 | App shell | Tauri 2 (Rust) + React 19 + HeroUI v3 + Tailwind CSS v4. |
 | Databases | Local SQLite file, **or** remote PostgreSQL, Microsoft SQL Server, or MySQL/MariaDB. |
 | Users | Multi-user with logins and roles stored in the database. |
-| Certificates | Files stored on a configured shared folder/UNC path; the database stores the path (Phase 4). |
+| Certificates | Files stored on a configured shared folder/UNC path; the database stores the path. |
 | Change history | Full audit trail: who, when, why, old value, new value. Nothing is hard-deleted. |
 | Hierarchy | A System contains Instruments. Each item keeps its own calibration schedule. |
 | Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists. |
@@ -107,6 +107,26 @@ All of these live in `polaris-core` so every backend applies them identically.
   logged too. In SQLite, triggers reject any `UPDATE` or `DELETE` on the table. Each item's page shows
   its own history; admins see the full log.
 
+## Attachments
+
+* An administrator sets the **attachments folder** in Settings, ideally a network share such as
+  `\\server\share\PolarisCal` that every user reaches by the same path. Saving it checks that this
+  computer can write there. Until it is set, attaching is unavailable.
+* Attaching **copies** the chosen file into the folder:
+  * `<ASSET-TAG>/<file>` for files on an Instrument or System;
+  * `<ASSET-TAG>/<YYYY-MM-DD>/<file>` for files on a calibration record (the calibration date).
+
+  Names are made safe for Windows, and a name that's already taken gets " (2)", " (3)", and so on.
+  The database stores the path *relative to the folder*, so the share can move as long as the
+  structure under it is kept.
+* Each file's **SHA-256 fingerprint** and size are recorded. Opening a file re-checks the
+  fingerprint: a changed file triggers a warning before it opens, and a missing file is reported with
+  where it was expected. The same file can't be attached twice to the same item or record.
+* Files are opened in their default Windows program and can be shown in File Explorer. Removing a file
+  from the list **archives** it (a reason is required); the file itself is never deleted.
+* Technicians and Administrators can attach and archive files; everyone can open them. Every attach
+  and archive is written to the audit trail.
+
 ## Database portability
 
 `sqlx` covers SQLite, PostgreSQL, and MySQL but not SQL Server, so the app talks to storage
@@ -143,6 +163,6 @@ Settings page instead of crashing.
 1. **Foundation** ✅: Tauri/React/HeroUI shell, core model and rules, `Store` trait, SQLite backend and migrations, read-only screens, CI.
 2. **Core data entry** ✅: forms for Instruments/Systems and Calibration Records, list management, detail views with child items and calibration history.
 3. **Users and audit trail** ✅: logins, roles (Admin / Technician / Viewer), reasons for change, field-level change history, idle auto-lock.
-4. **Certificates**: attach files from the configured share to records.
+4. **Certificates** ✅: attach files from the configured share to items and calibration records, with fingerprint checks.
 5. **Remote databases**: PostgreSQL, then MySQL/MariaDB, then SQL Server, plus a connection settings screen.
 6. **Release**: reports and exports, then the installer.

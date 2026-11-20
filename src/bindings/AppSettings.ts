@@ -7,4 +7,9 @@ export type AppSettings = {
 /**
  * Minutes without activity before the app locks and asks for the password.
  */
-idle_lock_minutes: number, };
+idle_lock_minutes: number, 
+/**
+ * Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where attached
+ * files are stored. Attaching files is unavailable until it is set.
+ */
+attachments_root: string | null, };

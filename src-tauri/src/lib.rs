@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod files;
 mod state;
 
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // POLARISCAL_HOME points config and data at another folder, so test
             // and demo runs never touch the real database in %APPDATA%.
@@ -53,6 +55,12 @@ pub fn run() {
             commands::update_calibration,
             commands::set_calibration_archived,
             commands::due_summary,
+            commands::list_attachments,
+            commands::add_attachments,
+            commands::open_attachment,
+            commands::reveal_attachment,
+            commands::set_attachment_archived,
+            commands::check_attachments_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PolarisCal");

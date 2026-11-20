@@ -5,6 +5,7 @@
 //! is still active, and that its role allows the action. The UI hides what a role can't
 //! do, but this is where it is enforced.
 
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -12,15 +13,18 @@ use chrono::Local;
 use polaris_core::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
 use polaris_core::auth::{NewUser, User, UserUpdate, hash_password, verify_password};
 use polaris_core::model::{
-    AppSettings, Asset, AssetFilter, AssetInput, CalibrationFilter, CalibrationInput,
-    CalibrationRecord, LookupInput, LookupItem, LookupKind, StoreInfo,
+    AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentCategory, AttachmentFilter,
+    CalibrationFilter, CalibrationInput, CalibrationRecord, LookupInput, LookupItem, LookupKind,
+    NewAttachment, StoreInfo,
 };
 use polaris_core::schedule::DueSummary;
 use polaris_core::{Error, FieldError, Id, Store};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 use ts_rs::TS;
 
+use crate::files::{self, FileError};
 use crate::state::{AppState, Session};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -456,6 +460,14 @@ pub async fn update_settings(
     settings: AppSettings,
 ) -> CmdResult<AppSettings> {
     let (store, me) = require(&state, Need::Admin).await?;
+    // Check the format first (clear message), then whether this computer can write there.
+    let mut settings = settings;
+    settings.normalize()?;
+    if let Some(root) = settings.attachments_root.as_deref() {
+        check_folder(PathBuf::from(root))
+            .await
+            .map_err(|e| CommandError::from(Error::validation("attachments_root", e.message)))?;
+    }
     let saved = store.update_settings(&ctx(&me, None), settings).await?;
     state.set_idle_lock_minutes(saved.idle_lock_minutes);
     Ok(saved)
@@ -624,6 +636,206 @@ pub async fn due_summary(state: State<'_, AppState>) -> CmdResult<DueSummary> {
     let (store, _) = require(&state, Need::SignedIn).await?;
     let assets = store.list_assets(&AssetFilter::default()).await?;
     Ok(DueSummary::from_assets(&assets, Local::now().date_naive()))
+}
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+impl From<FileError> for CommandError {
+    fn from(e: FileError) -> Self {
+        let kind = match e {
+            FileError::RootUnavailable(_) => ErrorKind::Config,
+            FileError::Io { .. } => ErrorKind::Database,
+            FileError::NotAFile(_) | FileError::TooLarge { .. } | FileError::BadPath(_) => {
+                ErrorKind::Validation
+            }
+        };
+        CommandError::new(kind, e.to_string())
+    }
+}
+
+/// Runs blocking file work off the async runtime.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> CmdResult<T> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| CommandError::new(ErrorKind::Database, format!("background task failed: {e}")))
+}
+
+async fn attachments_root(store: &Arc<dyn Store>) -> CmdResult<PathBuf> {
+    store
+        .settings()
+        .await?
+        .attachments_root
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            CommandError::new(
+                ErrorKind::Config,
+                "An administrator needs to choose the attachments folder in Settings first.",
+            )
+        })
+}
+
+async fn check_folder(root: PathBuf) -> CmdResult<()> {
+    blocking(move || files::check_writable(&root))
+        .await?
+        .map_err(Into::into)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_attachments(
+    state: State<'_, AppState>,
+    filter: AttachmentFilter,
+) -> CmdResult<Vec<Attachment>> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    Ok(store.list_attachments(&filter).await?)
+}
+
+/// Copies the chosen files into the attachments folder and records them.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn add_attachments(
+    state: State<'_, AppState>,
+    asset_id: Id,
+    calibration_id: Option<Id>,
+    category: AttachmentCategory,
+    paths: Vec<String>,
+    description: Option<String>,
+) -> CmdResult<Vec<Attachment>> {
+    let (store, me) = require(&state, Need::Editor).await?;
+    let root = attachments_root(&store).await?;
+    let asset = store.get_asset(asset_id).await?;
+    if asset.is_archived {
+        return Err(
+            Error::validation("asset_id", "Restore this item before attaching files.").into(),
+        );
+    }
+    let mut folder = vec![asset.asset_tag.clone()];
+    if let Some(cal_id) = calibration_id {
+        let record = store.get_calibration(cal_id).await?;
+        if record.asset_id != asset_id {
+            return Err(Error::validation(
+                "calibration_id",
+                "That calibration record doesn't belong to this item.",
+            )
+            .into());
+        }
+        folder.push(record.cal_date.to_string());
+    }
+
+    let mut saved = Vec::with_capacity(paths.len());
+    for path in paths {
+        let (root_c, folder_c) = (root.clone(), folder.clone());
+        let stored = blocking(move || {
+            let parts: Vec<&str> = folder_c.iter().map(String::as_str).collect();
+            files::store_file(&root_c, &parts, &PathBuf::from(path))
+        })
+        .await??;
+        let input = NewAttachment {
+            asset_id,
+            calibration_id,
+            category,
+            file_name: stored.file_name.clone(),
+            relative_path: stored.relative_path.clone(),
+            size_bytes: stored.size_bytes,
+            sha256: stored.sha256.clone(),
+            content_type: stored.content_type.clone(),
+            description: description.clone(),
+        };
+        match store.create_attachment(&ctx(&me, None), input).await {
+            Ok(a) => saved.push(a),
+            Err(e) => {
+                files::discard(&root, &stored.relative_path);
+                return Err(e.into());
+            }
+        }
+    }
+    Ok(saved)
+}
+
+/// Finds an attachment's file and confirms it is the one that was attached.
+async fn verified_path(
+    store: &Arc<dyn Store>,
+    id: Id,
+    force: bool,
+) -> CmdResult<(Attachment, PathBuf)> {
+    let attachment = store.get_attachment(id).await?;
+    let root = attachments_root(store).await?;
+    let path = files::resolve(&root, &attachment.relative_path)?;
+    let check = path.clone();
+    let hashed = blocking(move || files::hash_file(&check)).await?;
+    match hashed {
+        Ok((sha, _)) if sha == attachment.sha256 || force => Ok((attachment, path)),
+        Ok(_) => Err(CommandError::new(
+            ErrorKind::Conflict,
+            format!(
+                "{} has changed since it was attached, so it may not be the original.",
+                attachment.file_name
+            ),
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(CommandError::new(
+            ErrorKind::NotFound,
+            format!(
+                "{} is missing from the attachments folder (expected at {}).",
+                attachment.file_name,
+                path.display()
+            ),
+        )),
+        Err(e) => Err(CommandError::new(
+            ErrorKind::Database,
+            format!("Couldn't read {}: {e}", path.display()),
+        )),
+    }
+}
+
+/// Opens the file in its default program after checking its fingerprint.
+/// `force` opens it even if it has changed since it was attached.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_attachment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Id,
+    force: bool,
+) -> CmdResult<()> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    let (_, path) = verified_path(&store, id, force).await?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| CommandError::new(ErrorKind::Config, format!("Couldn't open the file: {e}")))
+}
+
+/// Shows the file in File Explorer.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn reveal_attachment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: Id,
+) -> CmdResult<()> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    let (_, path) = verified_path(&store, id, true).await?;
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| CommandError::new(ErrorKind::Config, format!("Couldn't show the file: {e}")))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn set_attachment_archived(
+    state: State<'_, AppState>,
+    id: Id,
+    expected_version: i64,
+    archived: bool,
+    reason: Option<String>,
+) -> CmdResult<Attachment> {
+    let (store, me) = require(&state, Need::Editor).await?;
+    Ok(store
+        .set_attachment_archived(&ctx(&me, reason), id, expected_version, archived)
+        .await?)
+}
+
+/// Lets an admin test a folder before saving it as the attachments folder.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn check_attachments_folder(state: State<'_, AppState>, path: String) -> CmdResult<()> {
+    require(&state, Need::Admin).await?;
+    check_folder(PathBuf::from(path.trim())).await
 }
 
 #[cfg(test)]

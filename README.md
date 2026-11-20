@@ -8,7 +8,7 @@ number, and its condition as received and as returned.
 It runs as a standalone desktop app on a local SQLite database. Support for shared PostgreSQL, SQL
 Server, and MySQL/MariaDB databases is on the roadmap.
 
-> **Status:** early development (Phase 3 of 6). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> **Status:** early development (Phase 4 of 6). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for the design, the business rules, and the roadmap.
 
 ## Tech stack

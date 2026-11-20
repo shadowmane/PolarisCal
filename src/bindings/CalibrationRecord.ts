@@ -14,4 +14,8 @@ cost_cents: number | null, certificate_number: string | null, condition_received
 /**
  * Due date this calibration established (cal date + the item's interval at the time).
  */
-next_due_date: string | null, notes: string | null, is_archived: boolean, row_version: number, created_at: string, updated_at: string, };
+next_due_date: string | null, notes: string | null, 
+/**
+ * Non-archived files attached to this record (certificates, data sheets).
+ */
+attachment_count: number, is_archived: boolean, row_version: number, created_at: string, updated_at: string, };

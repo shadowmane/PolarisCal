@@ -3,8 +3,9 @@ use async_trait::async_trait;
 use crate::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
 use crate::auth::{NewUser, User, UserCredentials, UserUpdate};
 use crate::model::{
-    AppSettings, Asset, AssetFilter, AssetInput, CalibrationFilter, CalibrationInput,
-    CalibrationRecord, LookupInput, LookupItem, LookupKind, StoreInfo,
+    AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentFilter, CalibrationFilter,
+    CalibrationInput, CalibrationRecord, LookupInput, LookupItem, LookupKind, NewAttachment,
+    StoreInfo,
 };
 use crate::{Id, Result};
 
@@ -113,6 +114,27 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         archived: bool,
     ) -> Result<Asset>;
+
+    // --- Attachments -------------------------------------------------------------
+
+    async fn list_attachments(&self, filter: &AttachmentFilter) -> Result<Vec<Attachment>>;
+    async fn get_attachment(&self, id: Id) -> Result<Attachment>;
+    /// Records a file the caller has already copied into the attachments folder.
+    /// The asset must exist and not be archived; a calibration record, if given,
+    /// must belong to that asset.
+    async fn create_attachment(
+        &self,
+        ctx: &WriteContext,
+        input: NewAttachment,
+    ) -> Result<Attachment>;
+    /// Archiving or restoring requires a reason. The file itself is never deleted.
+    async fn set_attachment_archived(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        expected_version: i64,
+        archived: bool,
+    ) -> Result<Attachment>;
 
     // --- Calibration records ---------------------------------------------------
 

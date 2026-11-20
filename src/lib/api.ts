@@ -7,6 +7,9 @@ import type { AppSettings } from "../bindings/AppSettings";
 import type { Asset } from "../bindings/Asset";
 import type { AssetFilter } from "../bindings/AssetFilter";
 import type { AssetInput } from "../bindings/AssetInput";
+import type { Attachment } from "../bindings/Attachment";
+import type { AttachmentCategory } from "../bindings/AttachmentCategory";
+import type { AttachmentFilter } from "../bindings/AttachmentFilter";
 import type { AuditEntry } from "../bindings/AuditEntry";
 import type { AuditFilter } from "../bindings/AuditFilter";
 import type { AuthStatus } from "../bindings/AuthStatus";
@@ -136,4 +139,29 @@ export const api = {
     }),
 
   dueSummary: () => call<DueSummary>("due_summary"),
+
+  // Attachments
+  listAttachments: (filter: Partial<AttachmentFilter> = {}) =>
+    call<Attachment[]>("list_attachments", {
+      filter: { asset_id: null, calibration_id: null, include_archived: false, ...filter },
+    }),
+  addAttachments: (args: {
+    assetId: number;
+    calibrationId?: number | null;
+    category: AttachmentCategory;
+    paths: string[];
+    description?: string | null;
+  }) =>
+    call<Attachment[]>("add_attachments", {
+      asset_id: args.assetId,
+      calibration_id: args.calibrationId ?? null,
+      category: args.category,
+      paths: args.paths,
+      description: args.description ?? null,
+    }),
+  openAttachment: (id: number, force = false) => call<void>("open_attachment", { id, force }),
+  revealAttachment: (id: number) => call<void>("reveal_attachment", { id }),
+  setAttachmentArchived: (id: number, expectedVersion: number, archived: boolean, reason: string) =>
+    call<Attachment>("set_attachment_archived", { id, expected_version: expectedVersion, archived, reason }),
+  checkAttachmentsFolder: (path: string) => call<void>("check_attachments_folder", { path }),
 };

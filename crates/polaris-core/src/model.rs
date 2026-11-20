@@ -143,6 +143,17 @@ text_enum!(
         User => "user",
         Session => "session",
         Settings => "settings",
+        Attachment => "attachment",
+    }
+);
+
+text_enum!(
+    /// What an attached file is.
+    AttachmentCategory {
+        Certificate => "certificate",
+        Document => "document",
+        Photo => "photo",
+        Other => "other",
     }
 );
 
@@ -310,6 +321,8 @@ pub struct CalibrationRecord {
     /// Due date this calibration established (cal date + the item's interval at the time).
     pub next_due_date: Option<NaiveDate>,
     pub notes: Option<String>,
+    /// Non-archived files attached to this record (certificates, data sheets).
+    pub attachment_count: i64,
     pub is_archived: bool,
     pub row_version: i64,
     pub created_at: DateTime<Utc>,
@@ -409,32 +422,109 @@ impl LookupInput {
     }
 }
 
+/// A file attached to an Instrument/System or to one of its calibration records.
+/// The file itself lives under the shared attachments folder; the database keeps
+/// its path relative to that folder plus a SHA-256 fingerprint to detect changes.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct Attachment {
+    pub id: Id,
+    pub asset_id: Id,
+    pub asset_tag: String,
+    /// Set when the file belongs to a calibration record (e.g. its certificate).
+    pub calibration_id: Option<Id>,
+    pub calibration_date: Option<NaiveDate>,
+    pub category: AttachmentCategory,
+    /// The original file name, as shown to users.
+    pub file_name: String,
+    /// Path under the attachments folder, with `/` separators.
+    pub relative_path: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+    pub content_type: Option<String>,
+    pub description: Option<String>,
+    pub uploaded_by: String,
+    pub is_archived: bool,
+    pub row_version: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A file that has already been copied into the attachments folder and now
+/// needs its database record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewAttachment {
+    pub asset_id: Id,
+    pub calibration_id: Option<Id>,
+    pub category: AttachmentCategory,
+    pub file_name: String,
+    pub relative_path: String,
+    pub size_bytes: i64,
+    pub sha256: String,
+    pub content_type: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AttachmentFilter {
+    pub asset_id: Option<Id>,
+    pub calibration_id: Option<Id>,
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
 /// Organization-wide settings stored in the database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct AppSettings {
     /// Minutes without activity before the app locks and asks for the password.
     pub idle_lock_minutes: u32,
+    /// Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where attached
+    /// files are stored. Attaching files is unavailable until it is set.
+    pub attachments_root: Option<String>,
 }
 
 impl AppSettings {
     pub const DEFAULT_IDLE_LOCK_MINUTES: u32 = 15;
 
-    pub fn validate(&self) -> Result<()> {
+    /// Trims the folder path (blank means unset) and checks the values. Whether the
+    /// folder is reachable and writable is checked by the app, not here.
+    pub fn normalize(&mut self) -> Result<()> {
+        clean(&mut self.attachments_root);
         if !(1..=240).contains(&self.idle_lock_minutes) {
             return Err(Error::validation(
                 "idle_lock_minutes",
                 "Auto-lock must be between 1 and 240 minutes.",
             ));
         }
+        if let Some(root) = &self.attachments_root
+            && !is_absolute_windows_path(root)
+        {
+            return Err(Error::validation(
+                "attachments_root",
+                "Use a full path such as \\\\server\\share\\PolarisCal or D:\\PolarisCal.",
+            ));
+        }
         Ok(())
     }
+}
+
+/// `\\server\share...` or `C:\...` (either slash direction).
+fn is_absolute_windows_path(p: &str) -> bool {
+    let b = p.as_bytes();
+    let unc = p.starts_with("\\\\") || p.starts_with("//");
+    let drive = b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b[2] == b'\\' || b[2] == b'/');
+    unc || drive
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
             idle_lock_minutes: Self::DEFAULT_IDLE_LOCK_MINUTES,
+            attachments_root: None,
         }
     }
 }
@@ -515,6 +605,39 @@ mod tests {
         };
         let fields: Vec<_> = errors.iter().map(|e| e.field.as_str()).collect();
         assert_eq!(fields, ["asset_tag", "description", "cal_interval"]);
+    }
+
+    #[test]
+    fn settings_normalize_paths() {
+        let mut s = AppSettings {
+            idle_lock_minutes: 15,
+            attachments_root: Some("   ".into()),
+        };
+        s.normalize().unwrap();
+        assert_eq!(s.attachments_root, None, "blank means unset");
+
+        for ok in [r"\\server\share\PolarisCal", r"D:\Cal", "//server/share"] {
+            let mut s = AppSettings {
+                idle_lock_minutes: 15,
+                attachments_root: Some(ok.into()),
+            };
+            assert!(s.normalize().is_ok(), "{ok}");
+        }
+        for bad in ["relative\\folder", "Cal", "C:"] {
+            let mut s = AppSettings {
+                idle_lock_minutes: 15,
+                attachments_root: Some(bad.into()),
+            };
+            assert!(
+                matches!(s.normalize(), Err(Error::Validation(ref e)) if e[0].field == "attachments_root"),
+                "{bad}"
+            );
+        }
+        let mut s = AppSettings {
+            idle_lock_minutes: 0,
+            attachments_root: None,
+        };
+        assert!(s.normalize().is_err());
     }
 
     #[test]

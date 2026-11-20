@@ -1,5 +1,5 @@
 import { Button, Table } from "@heroui/react";
-import { ClipboardCheck, Plus } from "lucide-react";
+import { ClipboardCheck, Paperclip, Plus } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
@@ -102,7 +102,20 @@ export function CalibrationsPage() {
                       {r.provider_name}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
                     </Table.Cell>
-                    <Table.Cell>{r.certificate_number ?? EMPTY}</Table.Cell>
+                    <Table.Cell>
+                      <span className="inline-flex items-center gap-1.5">
+                        {r.certificate_number ?? EMPTY}
+                        {r.attachment_count > 0 && (
+                          <span
+                            className="inline-flex items-center gap-0.5 text-xs text-muted"
+                            title={`${r.attachment_count} file(s) attached`}
+                          >
+                            <Paperclip className="size-3.5" />
+                            {r.attachment_count}
+                          </span>
+                        )}
+                      </span>
+                    </Table.Cell>
                     <Table.Cell>
                       <StatusChip color={conditionReceivedMeta[r.condition_received].color}>
                         {conditionReceivedMeta[r.condition_received].label}

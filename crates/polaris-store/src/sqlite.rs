@@ -7,15 +7,15 @@ use async_trait::async_trait;
 use chrono::{Local, NaiveDate, Utc};
 use polaris_core::audit::{
     Actor, AuditEntry, AuditFilter, FieldChange, NewAuditEntry, WriteContext, asset_snapshot,
-    calibration_snapshot, created, diff, lookup_snapshot, user_snapshot,
+    attachment_snapshot, calibration_snapshot, created, diff, lookup_snapshot, user_snapshot,
 };
 use polaris_core::auth::{
     NewUser, User, UserCredentials, UserUpdate, check_password_rules, hash_password,
 };
 use polaris_core::model::{
-    AppSettings, Asset, AssetFilter, AssetInput, AssetKind, AuditAction, AuditEntity, CalInterval,
-    CalibrationFilter, CalibrationInput, CalibrationRecord, LookupInput, LookupItem, LookupKind,
-    Role, StoreInfo,
+    AppSettings, Asset, AssetFilter, AssetInput, AssetKind, Attachment, AttachmentFilter,
+    AuditAction, AuditEntity, CalInterval, CalibrationFilter, CalibrationInput, CalibrationRecord,
+    LookupInput, LookupItem, LookupKind, NewAttachment, Role, StoreInfo,
 };
 use polaris_core::schedule::{add_interval, derive_dates, due_status};
 use polaris_core::{Error, Id, Result, Store};
@@ -331,6 +331,8 @@ macro_rules! calibration_select {
         "SELECT r.id, r.asset_id, a.asset_tag, r.cal_date, r.provider_id, p.name AS provider_name,
                 r.technician, r.cost_cents, r.certificate_number,
                 r.condition_received, r.condition_returned, r.next_due_date, r.notes,
+                (SELECT COUNT(*) FROM attachments f
+                  WHERE f.calibration_id = r.id AND f.is_archived = 0) AS attachment_count,
                 r.is_archived, r.row_version, r.created_at, r.updated_at
          FROM calibration_records r
          JOIN assets a                ON a.id = r.asset_id
@@ -353,6 +355,7 @@ fn map_calibration(row: &SqliteRow) -> Result<CalibrationRecord> {
         condition_returned: get::<String>(row, "condition_returned")?.parse()?,
         next_due_date: get(row, "next_due_date")?,
         notes: get(row, "notes")?,
+        attachment_count: get(row, "attachment_count")?,
         is_archived: get(row, "is_archived")?,
         row_version: get(row, "row_version")?,
         created_at: get(row, "created_at")?,
@@ -600,6 +603,56 @@ fn map_audit(row: &SqliteRow) -> Result<AuditEntry> {
 
 fn lookup_label(item: &LookupItem) -> String {
     format!("{}: {}", item.kind, item.name)
+}
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+macro_rules! attachment_select {
+    () => {
+        "SELECT f.id, f.asset_id, a.asset_tag, f.calibration_id, r.cal_date AS calibration_date,
+                f.category, f.file_name, f.relative_path, f.size_bytes, f.sha256, f.content_type,
+                f.description, f.uploaded_by, f.is_archived, f.row_version, f.created_at
+         FROM attachments f
+         JOIN assets a                    ON a.id = f.asset_id
+         LEFT JOIN calibration_records r  ON r.id = f.calibration_id"
+    };
+}
+
+fn map_attachment(row: &SqliteRow) -> Result<Attachment> {
+    Ok(Attachment {
+        id: get(row, "id")?,
+        asset_id: get(row, "asset_id")?,
+        asset_tag: get(row, "asset_tag")?,
+        calibration_id: get(row, "calibration_id")?,
+        calibration_date: get(row, "calibration_date")?,
+        category: get::<String>(row, "category")?.parse()?,
+        file_name: get(row, "file_name")?,
+        relative_path: get(row, "relative_path")?,
+        size_bytes: get(row, "size_bytes")?,
+        sha256: get(row, "sha256")?,
+        content_type: get(row, "content_type")?,
+        description: get(row, "description")?,
+        uploaded_by: get(row, "uploaded_by")?,
+        is_archived: get(row, "is_archived")?,
+        row_version: get(row, "row_version")?,
+        created_at: get(row, "created_at")?,
+    })
+}
+
+async fn fetch_attachment(conn: &mut SqliteConnection, id: Id) -> Result<Attachment> {
+    const SQL: &str = concat!(attachment_select!(), " WHERE f.id = ?1");
+    let row = sqlx::query(SQL)
+        .bind(id)
+        .fetch_optional(conn)
+        .await
+        .map_err(db)?
+        .ok_or(Error::NotFound {
+            entity: "attachment",
+            id,
+        })?;
+    map_attachment(&row)
 }
 
 // ---------------------------------------------------------------------------
@@ -884,44 +937,66 @@ impl Store for SqliteStore {
     // --- Settings ------------------------------------------------------------
 
     async fn settings(&self) -> Result<AppSettings> {
-        let value: Option<String> =
-            sqlx::query_scalar("SELECT value FROM app_settings WHERE key = 'idle_lock_minutes'")
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(db)?;
-        let idle_lock_minutes = value
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(AppSettings::DEFAULT_IDLE_LOCK_MINUTES);
-        Ok(AppSettings { idle_lock_minutes })
+        let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM app_settings")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
+        let value = |key: &str| rows.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        Ok(AppSettings {
+            idle_lock_minutes: value("idle_lock_minutes")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(AppSettings::DEFAULT_IDLE_LOCK_MINUTES),
+            attachments_root: value("attachments_root").filter(|v| !v.is_empty()),
+        })
     }
 
     async fn update_settings(
         &self,
         ctx: &WriteContext,
-        settings: AppSettings,
+        mut settings: AppSettings,
     ) -> Result<AppSettings> {
-        settings.validate()?;
+        settings.normalize()?;
         let before = self.settings().await?;
         let mut tx = self.begin().await?;
-        sqlx::query(
-            "INSERT INTO app_settings (key, value, updated_at) VALUES ('idle_lock_minutes', ?1, ?2)
-             ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        )
-        .bind(settings.idle_lock_minutes.to_string())
-        .bind(Utc::now())
-        .execute(&mut *tx)
-        .await
-        .map_err(db)?;
-        if before != settings {
+        let now = Utc::now();
+        let pairs = [
+            ("idle_lock_minutes", settings.idle_lock_minutes.to_string()),
+            (
+                "attachments_root",
+                settings.attachments_root.clone().unwrap_or_default(),
+            ),
+        ];
+        for (key, value) in pairs {
+            sqlx::query(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            )
+            .bind(key)
+            .bind(value)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
+        }
+        let mut changes = Vec::new();
+        if before.idle_lock_minutes != settings.idle_lock_minutes {
+            changes.push(FieldChange {
+                field: "Auto-lock after (minutes)".into(),
+                old: Some(before.idle_lock_minutes.to_string()),
+                new: Some(settings.idle_lock_minutes.to_string()),
+            });
+        }
+        if before.attachments_root != settings.attachments_root {
+            changes.push(FieldChange {
+                field: "Attachments folder".into(),
+                old: before.attachments_root.clone(),
+                new: settings.attachments_root.clone(),
+            });
+        }
+        if !changes.is_empty() {
             write_audit(
                 &mut tx,
-                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Settings).changes(vec![
-                    FieldChange {
-                        field: "Auto-lock after (minutes)".into(),
-                        old: Some(before.idle_lock_minutes.to_string()),
-                        new: Some(settings.idle_lock_minutes.to_string()),
-                    },
-                ]),
+                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Settings).changes(changes),
             )
             .await?;
         }
@@ -1286,6 +1361,187 @@ impl Store for SqliteStore {
                 .subject(id, &after.asset_tag)
                 .asset(id)
                 .changes(diff(&asset_snapshot(&before), &asset_snapshot(&after))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(after)
+    }
+
+    // --- Attachments -------------------------------------------------------------
+
+    async fn list_attachments(&self, filter: &AttachmentFilter) -> Result<Vec<Attachment>> {
+        const SQL: &str = concat!(
+            attachment_select!(),
+            " WHERE (?1 IS NULL OR f.asset_id = ?1)
+                AND (?2 IS NULL OR f.calibration_id = ?2)
+                AND (?3 = 1 OR f.is_archived = 0)
+              ORDER BY f.created_at DESC, f.id DESC"
+        );
+        sqlx::query(SQL)
+            .bind(filter.asset_id)
+            .bind(filter.calibration_id)
+            .bind(filter.include_archived)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?
+            .iter()
+            .map(map_attachment)
+            .collect()
+    }
+
+    async fn get_attachment(&self, id: Id) -> Result<Attachment> {
+        fetch_attachment(&mut *self.conn().await?, id).await
+    }
+
+    async fn create_attachment(
+        &self,
+        ctx: &WriteContext,
+        mut input: NewAttachment,
+    ) -> Result<Attachment> {
+        input.file_name = input.file_name.trim().to_string();
+        input.description = input
+            .description
+            .take()
+            .map(|d| d.trim().to_string())
+            .filter(|d| !d.is_empty());
+        if input.file_name.is_empty() || input.relative_path.trim().is_empty() {
+            return Err(Error::validation("file_name", "The file has no name."));
+        }
+        let mut tx = self.begin().await?;
+        let asset_archived: Option<bool> =
+            sqlx::query_scalar("SELECT is_archived FROM assets WHERE id = ?1")
+                .bind(input.asset_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db)?;
+        match asset_archived {
+            None => {
+                return Err(Error::validation(
+                    "asset_id",
+                    "The selected item does not exist.",
+                ));
+            }
+            Some(true) => {
+                return Err(Error::validation(
+                    "asset_id",
+                    "The selected item is archived.",
+                ));
+            }
+            Some(false) => {}
+        }
+        if let Some(cal_id) = input.calibration_id {
+            let owner: Option<Id> =
+                sqlx::query_scalar("SELECT asset_id FROM calibration_records WHERE id = ?1")
+                    .bind(cal_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db)?;
+            if owner != Some(input.asset_id) {
+                return Err(Error::validation(
+                    "calibration_id",
+                    "That calibration record doesn't belong to this item.",
+                ));
+            }
+        }
+
+        // The same file (by fingerprint) attached twice to the same item or record is
+        // almost always a mistake, and the two would be indistinguishable in the list.
+        let already: Option<String> = sqlx::query_scalar(
+            "SELECT file_name FROM attachments
+             WHERE asset_id = ?1 AND calibration_id IS ?2 AND sha256 = ?3 AND is_archived = 0
+             LIMIT 1",
+        )
+        .bind(input.asset_id)
+        .bind(input.calibration_id)
+        .bind(&input.sha256)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(db)?;
+        if let Some(existing) = already {
+            return Err(Error::Duplicate(format!(
+                "This file is already attached as {existing}."
+            )));
+        }
+
+        let id: Id = sqlx::query_scalar(
+            "INSERT INTO attachments (asset_id, calibration_id, category, file_name, relative_path,
+                                      size_bytes, sha256, content_type, description,
+                                      uploaded_by_id, uploaded_by, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)
+             RETURNING id",
+        )
+        .bind(input.asset_id)
+        .bind(input.calibration_id)
+        .bind(input.category.as_str())
+        .bind(&input.file_name)
+        .bind(&input.relative_path)
+        .bind(input.size_bytes)
+        .bind(&input.sha256)
+        .bind(&input.content_type)
+        .bind(&input.description)
+        .bind(ctx.actor.user_id)
+        .bind(&ctx.actor.username)
+        .bind(Utc::now())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| {
+            write_err(e, || {
+                format!("A file is already stored at {}.", input.relative_path)
+            })
+        })?;
+
+        let attachment = fetch_attachment(&mut tx, id).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Create, AuditEntity::Attachment)
+                .subject(id, &attachment.file_name)
+                .asset(attachment.asset_id)
+                .changes(created(&attachment_snapshot(&attachment))),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(attachment)
+    }
+
+    async fn set_attachment_archived(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        expected_version: i64,
+        archived: bool,
+    ) -> Result<Attachment> {
+        ctx.require_reason()?;
+        let mut tx = self.begin().await?;
+        let before = fetch_attachment(&mut tx, id).await?;
+        let result = sqlx::query(
+            "UPDATE attachments SET is_archived = ?3, updated_at = ?4, row_version = row_version + 1
+             WHERE id = ?1 AND row_version = ?2",
+        )
+        .bind(id)
+        .bind(expected_version)
+        .bind(archived)
+        .bind(Utc::now())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+        if result.rows_affected() == 0 {
+            return Err(missing_or_stale(&mut tx, "attachments", "attachment", id).await);
+        }
+        let after = fetch_attachment(&mut tx, id).await?;
+        let action = if archived {
+            AuditAction::Archive
+        } else {
+            AuditAction::Restore
+        };
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, action, AuditEntity::Attachment)
+                .subject(id, &after.file_name)
+                .asset(after.asset_id)
+                .changes(diff(
+                    &attachment_snapshot(&before),
+                    &attachment_snapshot(&after),
+                )),
         )
         .await?;
         tx.commit().await.map_err(db)?;

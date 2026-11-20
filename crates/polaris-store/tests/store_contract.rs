@@ -150,7 +150,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = sqlite().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, "sqlite");
-    assert_eq!(info.schema_version, 3);
+    assert_eq!(info.schema_version, 4);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -878,6 +878,7 @@ async fn settings_are_validated_and_audited() {
             &ctx(),
             AppSettings {
                 idle_lock_minutes: 0,
+                attachments_root: None,
             },
         )
         .await;
@@ -886,6 +887,7 @@ async fn settings_are_validated_and_audited() {
         &ctx(),
         AppSettings {
             idle_lock_minutes: 30,
+            attachments_root: None,
         },
     )
     .await
@@ -924,4 +926,228 @@ async fn sqlite_audit_log_is_append_only() {
     assert!(update.unwrap_err().to_string().contains("append-only"));
     let delete = sqlx::query("DELETE FROM audit_log").execute(&pool).await;
     assert!(delete.unwrap_err().to_string().contains("append-only"));
+}
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+fn file(asset_id: i64, calibration_id: Option<i64>, path: &str) -> NewAttachment {
+    NewAttachment {
+        asset_id,
+        calibration_id,
+        category: AttachmentCategory::Certificate,
+        file_name: format!(" {} ", path.rsplit('/').next().unwrap()),
+        relative_path: path.into(),
+        size_bytes: 1234,
+        sha256: "a".repeat(64),
+        content_type: Some("application/pdf".into()),
+        description: Some("  ".into()),
+    }
+}
+
+#[tokio::test]
+async fn attachments_link_to_assets_and_calibrations() {
+    let h = sqlite().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let a = s
+        .create_asset(&ctx(), asset_input(s, "ATT-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let other = s
+        .create_asset(&ctx(), asset_input(s, "ATT-2", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let rec = s
+        .create_calibration(&ctx(), cal(a.id, vendor, d(2026, 3, 1)))
+        .await
+        .unwrap();
+    assert_eq!(rec.attachment_count, 0);
+
+    let manual = s
+        .create_attachment(&ctx(), file(a.id, None, "ATT-1/manual.pdf"))
+        .await
+        .unwrap();
+    assert_eq!(manual.file_name, "manual.pdf", "trimmed");
+    assert_eq!(manual.description, None, "blank description dropped");
+    assert_eq!(manual.uploaded_by, "admin");
+    assert_eq!(manual.asset_tag, "ATT-1");
+
+    let cert = s
+        .create_attachment(&ctx(), file(a.id, Some(rec.id), "ATT-1/2026/cert.pdf"))
+        .await
+        .unwrap();
+    assert_eq!(cert.calibration_date, Some(d(2026, 3, 1)));
+    assert_eq!(s.get_calibration(rec.id).await.unwrap().attachment_count, 1);
+
+    let by_asset = s
+        .list_attachments(&AttachmentFilter {
+            asset_id: Some(a.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(by_asset.len(), 2);
+    let by_cal = s
+        .list_attachments(&AttachmentFilter {
+            calibration_id: Some(rec.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(by_cal.len(), 1);
+    assert_eq!(by_cal[0].id, cert.id);
+
+    // A calibration record from another item is refused.
+    let wrong = s
+        .create_attachment(&ctx(), file(other.id, Some(rec.id), "ATT-2/x.pdf"))
+        .await;
+    assert!(
+        matches!(wrong, Err(Error::Validation(ref e)) if e[0].field == "calibration_id"),
+        "{wrong:?}"
+    );
+
+    // The same stored path can't be recorded twice.
+    let mut same_path = file(a.id, None, "att-1/MANUAL.pdf");
+    same_path.sha256 = "b".repeat(64);
+    let dup = s.create_attachment(&ctx(), same_path).await;
+    assert!(matches!(dup, Err(Error::Duplicate(_))), "{dup:?}");
+
+    // Nor can identical content be attached twice to the same item (or the same record)...
+    let same_content = s
+        .create_attachment(&ctx(), file(a.id, None, "ATT-1/manual (2).pdf"))
+        .await;
+    assert!(
+        matches!(same_content, Err(Error::Duplicate(ref m)) if m.contains("manual.pdf")),
+        "{same_content:?}"
+    );
+    // ...but the same content on a different item is fine.
+    s.create_attachment(&ctx(), file(other.id, None, "ATT-2/manual.pdf"))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn archiving_attachments_needs_a_reason_and_is_audited() {
+    let h = sqlite().await;
+    let s = h.store.as_ref();
+    let a = s
+        .create_asset(&ctx(), asset_input(s, "ATT-3", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let f = s
+        .create_attachment(&ctx(), file(a.id, None, "ATT-3/photo.jpg"))
+        .await
+        .unwrap();
+
+    let no_reason = s
+        .set_attachment_archived(&ctx_without_reason(), f.id, f.row_version, true)
+        .await;
+    assert!(is_missing_reason(no_reason));
+
+    let archived = s
+        .set_attachment_archived(&ctx(), f.id, f.row_version, true)
+        .await
+        .unwrap();
+    assert!(archived.is_archived);
+    let active = s
+        .list_attachments(&AttachmentFilter {
+            asset_id: Some(a.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(active.is_empty());
+
+    let stale = s
+        .set_attachment_archived(&ctx(), f.id, f.row_version, false)
+        .await;
+    assert!(matches!(stale, Err(Error::Conflict(_))));
+
+    let history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(a.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let attachment_events: Vec<_> = history
+        .iter()
+        .filter(|e| e.entity == AuditEntity::Attachment)
+        .map(|e| e.action)
+        .collect();
+    assert_eq!(
+        attachment_events,
+        [AuditAction::Archive, AuditAction::Create]
+    );
+}
+
+#[tokio::test]
+async fn attachments_need_an_active_item() {
+    let h = sqlite().await;
+    let s = h.store.as_ref();
+    let a = s
+        .create_asset(&ctx(), asset_input(s, "ATT-4", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    s.set_asset_archived(&ctx(), a.id, a.row_version, true)
+        .await
+        .unwrap();
+    let r = s
+        .create_attachment(&ctx(), file(a.id, None, "ATT-4/a.pdf"))
+        .await;
+    assert!(
+        matches!(r, Err(Error::Validation(ref e)) if e[0].field == "asset_id"),
+        "{r:?}"
+    );
+    let missing = s
+        .create_attachment(&ctx(), file(9999, None, "nope/a.pdf"))
+        .await;
+    assert!(matches!(missing, Err(Error::Validation(_))));
+}
+
+#[tokio::test]
+async fn attachments_folder_setting_round_trips() {
+    let h = sqlite().await;
+    let s = h.store.as_ref();
+    assert_eq!(s.settings().await.unwrap().attachments_root, None);
+    let saved = s
+        .update_settings(
+            &ctx(),
+            AppSettings {
+                idle_lock_minutes: 15,
+                attachments_root: Some(r" \\files\cal ".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.attachments_root.as_deref(), Some(r"\\files\cal"));
+    assert_eq!(
+        s.settings().await.unwrap().attachments_root.as_deref(),
+        Some(r"\\files\cal")
+    );
+
+    let bad = s
+        .update_settings(
+            &ctx(),
+            AppSettings {
+                idle_lock_minutes: 15,
+                attachments_root: Some("relative".into()),
+            },
+        )
+        .await;
+    assert!(matches!(bad, Err(Error::Validation(ref e)) if e[0].field == "attachments_root"));
+
+    // Clearing it is allowed.
+    s.update_settings(
+        &ctx(),
+        AppSettings {
+            idle_lock_minutes: 15,
+            attachments_root: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(s.settings().await.unwrap().attachments_root, None);
 }

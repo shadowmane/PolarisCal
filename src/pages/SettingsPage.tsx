@@ -1,15 +1,17 @@
 import { Button, Card, toast, ToggleButton, ToggleButtonGroup, useTheme } from "@heroui/react";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { FolderOpen, Monitor, Moon, Sun } from "lucide-react";
+import type { AppSettings } from "../bindings/AppSettings";
 import { type ReactNode, useEffect, useState } from "react";
 import { ErrorAlert, Loading, PageHeader } from "../components/common";
 import { ApiError, api } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
-import { NumberInput } from "../components/fields";
+import { NumberInput, TextInput } from "../components/fields";
 import { useAuth } from "../lib/auth";
 import { fieldErrors } from "../lib/forms";
 import { roleMeta } from "../lib/permissions";
 
-function SecurityCard() {
+function SecurityCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
   const { can, idleLockMinutes, refresh, user } = useAuth();
   const isAdmin = can("admin");
   const [minutes, setMinutes] = useState<number | null>(idleLockMinutes);
@@ -19,10 +21,12 @@ function SecurityCard() {
 
   async function save() {
     if (minutes == null) return setError("Enter a number of minutes.");
+    if (!settings) return;
     setBusy(true);
     try {
-      await api.updateSettings({ idle_lock_minutes: minutes });
+      await api.updateSettings({ ...settings, idle_lock_minutes: minutes });
       await refresh();
+      onSaved();
       setError(undefined);
       toast.success("Security settings saved");
     } catch (e) {
@@ -70,6 +74,116 @@ function SecurityCard() {
   );
 }
 
+const EXAMPLE_SHARE = String.raw`\\server\share\PolarisCal`;
+
+function AttachmentsFolderCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
+  const { can } = useAuth();
+  const isAdmin = can("admin");
+  const [folder, setFolder] = useState("");
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState<"test" | "save" | null>(null);
+  useEffect(() => setFolder(settings?.attachments_root ?? ""), [settings]);
+
+  async function browse() {
+    const picked = await openDialog({
+      directory: true,
+      multiple: false,
+      title: "Choose the attachments folder",
+      defaultPath: folder || undefined,
+    });
+    if (typeof picked === "string") {
+      setFolder(picked);
+      setError(undefined);
+    }
+  }
+
+  async function test() {
+    setBusy("test");
+    try {
+      await api.checkAttachmentsFolder(folder);
+      setError(undefined);
+      toast.success("PolarisCal can write to this folder");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function save() {
+    if (!settings) return;
+    setBusy("save");
+    try {
+      await api.updateSettings({ ...settings, attachments_root: folder.trim() || null });
+      setError(undefined);
+      toast.success(folder.trim() ? "Attachments folder saved" : "Attachments folder cleared");
+      onSaved();
+    } catch (e) {
+      const fields = fieldErrors(e);
+      setError(fields.attachments_root ?? (e instanceof ApiError ? e.message : String(e)));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>Attachments folder</Card.Title>
+        <Card.Description>
+          Certificates and other files are copied here, in a folder per item. Use a network share (for example
+          {EXAMPLE_SHARE}) that everyone using PolarisCal can reach with the same path.
+        </Card.Description>
+      </Card.Header>
+      <Card.Content>
+        {isAdmin ? (
+          <div className="flex flex-col gap-3">
+            <div className="flex items-start gap-2">
+              <TextInput
+                label="Folder"
+                value={folder}
+                onChange={(v) => {
+                  setFolder(v);
+                  setError(undefined);
+                }}
+                error={error}
+                placeholder={EXAMPLE_SHARE}
+                className="flex-1"
+              />
+              <Button className="mt-6" variant="secondary" onPress={() => void browse()}>
+                <FolderOpen className="size-4" /> Browse
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="tertiary"
+                isDisabled={!folder.trim()}
+                isPending={busy === "test"}
+                onPress={() => void test()}
+              >
+                Test access
+              </Button>
+              <Button isPending={busy === "save"} onPress={() => void save()}>
+                Save
+              </Button>
+            </div>
+            <p className="text-xs text-muted">
+              Changing the folder doesn't move existing files. Copy them to the new location yourself, keeping
+              the same folder structure.
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm break-all">
+            {settings?.attachments_root ?? (
+              <span className="text-muted">Not set. An administrator needs to choose a folder before files can be attached.</span>
+            )}
+          </p>
+        )}
+      </Card.Content>
+    </Card>
+  );
+}
+
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[180px_1fr] gap-4 py-2.5 text-sm">
@@ -89,6 +203,7 @@ const BACKEND_NAMES: Record<string, string> = {
 export function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.appInfo(), []);
   const { theme, setTheme } = useTheme("system");
+  const settings = useAsync(() => api.getSettings(), []);
 
   return (
     <>
@@ -127,7 +242,8 @@ export function SettingsPage() {
           </Card>
         )}
 
-        <SecurityCard />
+        <SecurityCard settings={settings.data} onSaved={settings.reload} />
+        <AttachmentsFolderCard settings={settings.data} onSaved={settings.reload} />
 
         <Card>
           <Card.Header>

@@ -10,7 +10,8 @@ use ts_rs::TS;
 
 use crate::auth::User;
 use crate::model::{
-    Asset, AuditAction, AuditEntity, CalInterval, CalibrationRecord, IntervalUnit, LookupItem,
+    Asset, Attachment, AuditAction, AuditEntity, CalInterval, CalibrationRecord, IntervalUnit,
+    LookupItem,
 };
 use crate::{Error, Id, Result};
 
@@ -232,6 +233,19 @@ pub fn lookup_snapshot(l: &LookupItem) -> Snapshot {
         s.push(("Track due dates", yes_no(v)));
     }
     s
+}
+
+pub fn attachment_snapshot(a: &Attachment) -> Snapshot {
+    vec![
+        ("File name", Some(a.file_name.clone())),
+        ("Category", Some(a.category.to_string())),
+        ("Calibration record", opt(&a.calibration_date)),
+        ("Stored as", Some(a.relative_path.clone())),
+        ("Size (bytes)", Some(a.size_bytes.to_string())),
+        ("SHA-256", Some(a.sha256.clone())),
+        ("Description", a.description.clone()),
+        ("Archived", yes_no(a.is_archived)),
+    ]
 }
 
 pub fn user_snapshot(u: &User) -> Snapshot {

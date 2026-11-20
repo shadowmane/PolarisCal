@@ -64,6 +64,9 @@ export function AuditList({ entries, showSubject = true }: { entries: AuditEntry
               {!showSubject && e.entity === "calibration" && (
                 <span className="font-medium">Calibration record {e.entity_label ? `(${e.entity_label})` : ""}</span>
               )}
+              {!showSubject && e.entity === "attachment" && (
+                <span className="font-medium">File {e.entity_label ? `"${e.entity_label}"` : ""}</span>
+              )}
               <span className="text-muted">
                 by <span className="text-foreground">{e.username}</span> · {formatDateTime(e.occurred_at)}
               </span>

@@ -16,6 +16,7 @@ import {
 } from "../lib/forms";
 import { lookupOptions, useLookups } from "../lib/lookups";
 import { useAsync } from "../lib/useAsync";
+import { AttachmentsPanel, PendingFiles } from "./Attachments";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DateInput, MoneyInput, SelectInput, TextAreaInput, TextInput } from "./fields";
 
@@ -96,6 +97,9 @@ export function CalibrationDialog({
   const [saving, setSaving] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [reason, setReason] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<string[]>([]);
+  const settings = useAsync(() => api.getSettings(), [isOpen]);
+  const folderSet = !!settings.data?.attachments_root;
 
   // Reset whenever the dialog opens.
   useEffect(() => {
@@ -111,6 +115,7 @@ export function CalibrationDialog({
     setErrors({});
     setFormError(undefined);
     setReason("");
+    setPendingFiles([]);
   }, [isOpen, record, asset]);
 
   function set<K extends keyof CalibrationForm>(key: K, value: CalibrationForm[K]) {
@@ -143,6 +148,21 @@ export function CalibrationDialog({
         ? await api.updateCalibration(record.id, record.row_version, converted.value, reason)
         : await api.createCalibration(converted.value);
       toast.success(record ? "Calibration record saved" : `Calibration recorded for ${saved.asset_tag}`);
+      if (!record && pendingFiles.length > 0) {
+        try {
+          await api.addAttachments({
+            assetId: saved.asset_id,
+            calibrationId: saved.id,
+            category: "certificate",
+            paths: pendingFiles,
+          });
+        } catch (e) {
+          toast.warning("The record was saved, but its files couldn't be attached.", {
+            description: e instanceof ApiError ? e.message : String(e),
+            timeout: 10000,
+          });
+        }
+      }
       onSaved(saved);
       onOpenChange(false);
     } catch (e) {
@@ -276,6 +296,29 @@ export function CalibrationDialog({
                     onChange={(v) => set("notes", v)}
                     className="md:col-span-2"
                   />
+                  <div className="border-t border-separator pt-4 md:col-span-2">
+                    {record ? (
+                      <>
+                        <div className="mb-2 text-sm font-medium">Certificates and files</div>
+                        <AttachmentsPanel
+                          assetId={record.asset_id}
+                          calibrationId={record.id}
+                          readOnly={record.is_archived}
+                          emptyText="No files attached to this record."
+                          onChanged={() => onSaved(record)}
+                        />
+                      </>
+                    ) : folderSet ? (
+                      <PendingFiles paths={pendingFiles} onChange={setPendingFiles} />
+                    ) : (
+                      settings.data && (
+                        <p className="text-xs text-muted">
+                          To attach certificates, an administrator needs to choose the attachments folder in
+                          Settings.
+                        </p>
+                      )
+                    )}
+                  </div>
                   {record && (
                     <TextAreaInput
                       label="Reason for change"
