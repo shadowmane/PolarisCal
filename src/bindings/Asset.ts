@@ -6,7 +6,17 @@ import type { DueStatus } from "./DueStatus";
 /**
  * An Instrument or System, with the display names of its lookups joined in.
  */
-export type Asset = { id: number, asset_tag: string, kind: AssetKind, parent_id: number | null, parent_tag: string | null, description: string, manufacturer_id: number | null, manufacturer_name: string | null, model_number: string | null, serial_number: string | null, location_id: number | null, location_name: string | null, department_id: number | null, department_name: string | null, owner_id: number | null, owner_name: string | null, status_id: number, status_name: string, warranty_end_date: string | null, cal_interval: CalInterval | null, in_service_date: string | null, first_cal_date: string | null, last_cal_date: string | null, 
+export type Asset = { id: number, asset_tag: string, kind: AssetKind, parent_id: number | null, parent_tag: string | null, description: string, manufacturer_id: number | null, manufacturer_name: string | null, model_number: string | null, serial_number: string | null, location_id: number | null, location_name: string | null, department_id: number | null, department_name: string | null, owner_id: number | null, owner_name: string | null, status_id: number, status_name: string, warranty_end_date: string | null, cal_interval: CalInterval | null, in_service_date: string | null, first_cal_date: string | null, 
+/**
+ * Derived: the latest calibration record's date, or `last_cal_date_entered`
+ * while the item has no (non-archived) records.
+ */
+last_cal_date: string | null, 
+/**
+ * The last calibration date a user typed in, e.g. for items brought over from
+ * another system. Kept separately so it returns if every record is archived.
+ */
+last_cal_date_entered: string | null, 
 /**
  * Derived: last calibration date plus the interval. Never set directly.
  */

@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { createHashRouter, RouterProvider } from "react-router";
 import { AppShell } from "./components/AppShell";
 import "./index.css";
+import { AssetDetailPage } from "./pages/AssetDetailPage";
+import { AssetFormPage } from "./pages/AssetFormPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { CalibrationsPage } from "./pages/CalibrationsPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -18,6 +20,9 @@ const router = createHashRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: "assets", element: <AssetsPage /> },
+      { path: "assets/new", element: <AssetFormPage key="new" /> },
+      { path: "assets/:id", element: <AssetDetailPage /> },
+      { path: "assets/:id/edit", element: <AssetFormPage /> },
       { path: "calibrations", element: <CalibrationsPage /> },
       { path: "lists", element: <ListsPage /> },
       { path: "settings", element: <SettingsPage /> },

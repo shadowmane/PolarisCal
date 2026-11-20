@@ -28,7 +28,8 @@ pub struct DerivedDates {
 
 /// Works out an asset's first/last/next calibration dates.
 ///
-/// * `first` is a recorded fact: kept if set, otherwise filled from the earliest record.
+/// * `first` is a recorded fact: kept if set, otherwise filled with the earliest
+///   calibration known, which is the earliest record or a previously entered last date.
 /// * `last` comes from the latest (non-archived) record; with no records the
 ///   manually entered value is kept, which supports items brought in from an older system.
 /// * `next` is always `last + interval`, or empty if either is missing.
@@ -38,11 +39,15 @@ pub fn derive_dates(
     record_dates: &[NaiveDate],
     interval: Option<CalInterval>,
 ) -> DerivedDates {
-    let earliest = record_dates.iter().min().copied();
+    let earliest_record = record_dates.iter().min().copied();
     let latest = record_dates.iter().max().copied();
+    let earliest_known = match (earliest_record, stored_last) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
     let last_cal_date = latest.or(stored_last);
     DerivedDates {
-        first_cal_date: stored_first.or(earliest),
+        first_cal_date: stored_first.or(earliest_known),
         last_cal_date,
         next_cal_date: last_cal_date
             .zip(interval)
@@ -171,10 +176,25 @@ mod tests {
     #[test]
     fn derive_uses_latest_record_and_fills_first() {
         let records = [d(2025, 6, 1), d(2026, 6, 1), d(2024, 6, 1)];
-        let r = derive_dates(None, Some(d(2023, 1, 1)), &records, Some(MONTHS_12));
+        let r = derive_dates(None, None, &records, Some(MONTHS_12));
         assert_eq!(r.first_cal_date, Some(d(2024, 6, 1)));
         assert_eq!(r.last_cal_date, Some(d(2026, 6, 1)));
         assert_eq!(r.next_cal_date, Some(d(2027, 6, 1)));
+    }
+
+    #[test]
+    fn first_date_counts_a_manually_entered_last_date() {
+        // Item brought over with a last calibration of 2026-03-15, then its first
+        // calibration recorded in PolarisCal: March is still the earliest known one.
+        let r = derive_dates(
+            None,
+            Some(d(2026, 3, 15)),
+            &[d(2026, 11, 18)],
+            Some(MONTHS_12),
+        );
+        assert_eq!(r.first_cal_date, Some(d(2026, 3, 15)));
+        assert_eq!(r.last_cal_date, Some(d(2026, 11, 18)));
+        assert_eq!(r.next_cal_date, Some(d(2027, 11, 18)));
     }
 
     #[test]

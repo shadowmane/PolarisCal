@@ -1,0 +1,363 @@
+import { Alert, Button, Form, Label, toast, ToggleButton, ToggleButtonGroup } from "@heroui/react";
+import { Boxes, Gauge } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router";
+import type { AssetKind } from "../bindings/AssetKind";
+import type { IntervalUnit } from "../bindings/IntervalUnit";
+import { ErrorAlert, Loading, PageHeader } from "../components/common";
+import {
+  DateInput,
+  FormSection,
+  NumberInput,
+  SelectInput,
+  TextAreaInput,
+  TextInput,
+} from "../components/fields";
+import { ApiError, api } from "../lib/api";
+import { formatDate } from "../lib/format";
+import {
+  type AssetForm,
+  assetToForm,
+  emptyAssetForm,
+  type FieldErrors,
+  fieldErrors,
+  formToAssetInput,
+} from "../lib/forms";
+import { lookupOptions, useLookups } from "../lib/lookups";
+import { useAsync } from "../lib/useAsync";
+
+/** Which server error key a form field reports under. */
+const ERROR_KEY: Partial<Record<keyof AssetForm, string>> = {
+  interval_value: "cal_interval",
+  interval_unit: "cal_interval",
+};
+
+export function AssetFormPage() {
+  const { id } = useParams();
+  const editing = id !== undefined;
+  const assetId = Number(id);
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+
+  const lookups = useLookups();
+  const systems = useAsync(() => api.listAssets({ kind: "system" }), []);
+  const existing = useAsync(() => (editing ? api.getAsset(assetId) : Promise.resolve(null)), [assetId]);
+  const records = useAsync(
+    () => (editing ? api.listCalibrations({ asset_id: assetId }) : Promise.resolve([])),
+    [assetId],
+  );
+
+  const [form, setForm] = useState<AssetForm | null>(null);
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [formError, setFormError] = useState<ApiError>();
+  const [saving, setSaving] = useState(false);
+
+  // Initialize the form once its source data has loaded.
+  useEffect(() => {
+    if (form) return;
+    if (editing) {
+      if (existing.data) setForm(assetToForm(existing.data));
+    } else if (lookups.data) {
+      const statuses = lookups.data.status.filter((s) => s.is_active);
+      const active = statuses.find((s) => s.name === "Active") ?? statuses[0];
+      const parent = params.get("parent");
+      setForm(
+        emptyAssetForm({
+          kind: params.get("kind") === "system" ? "system" : "instrument",
+          parent_id: parent ? Number(parent) : null,
+          status_id: active?.id ?? null,
+        }),
+      );
+    }
+  }, [editing, existing.data, lookups.data, form, params]);
+
+  const loadError = lookups.error ?? existing.error ?? systems.error;
+  if (loadError) return <ErrorAlert error={loadError} onRetry={() => window.location.reload()} />;
+  if (!form || !lookups.data) return <Loading />;
+
+  const original = existing.data;
+  const hasRecords = (records.data?.length ?? 0) > 0;
+  const hasChildren = (original?.child_count ?? 0) > 0;
+
+  function set<K extends keyof AssetForm>(key: K, value: AssetForm[K]) {
+    setForm((f) => (f ? { ...f, [key]: value } : f));
+    const errorKey = ERROR_KEY[key] ?? key;
+    setErrors(({ [errorKey]: _cleared, ...rest }) => rest);
+  }
+
+  async function save() {
+    if (!form) return;
+    setFormError(undefined);
+    const converted = formToAssetInput(form);
+    if (!converted.ok) {
+      setErrors(converted.errors);
+      return;
+    }
+    setSaving(true);
+    try {
+      const saved = editing
+        ? await api.updateAsset(assetId, original!.row_version, converted.value)
+        : await api.createAsset(converted.value);
+      toast.success(editing ? `Saved ${saved.asset_tag}` : `Created ${saved.asset_tag}`);
+      navigate(`/assets/${saved.id}`, { replace: true });
+    } catch (e) {
+      const err = e instanceof ApiError ? e : new ApiError("database", String(e));
+      if (err.kind === "duplicate") {
+        setErrors({ asset_tag: err.message });
+      } else {
+        const fields = fieldErrors(err);
+        setErrors(fields);
+        // Show a banner unless every problem is attached to a visible field.
+        if (Object.keys(fields).length === 0 || err.fields.some((f) => !f.field)) setFormError(err);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const systemOptions = (systems.data ?? [])
+    .filter((s) => s.id !== assetId && (!s.is_archived || s.id === form.parent_id))
+    .map((s) => ({ id: s.id, label: s.asset_tag, description: s.description }));
+
+  const kindLabel = form.kind === "system" ? "System" : "Instrument";
+
+  return (
+    <Form
+      validationBehavior="aria"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <PageHeader
+        title={editing ? `Edit ${original?.asset_tag}` : `New ${kindLabel}`}
+        description={
+          editing
+            ? original?.description
+            : form.kind === "system"
+              ? "A System groups the Instruments it contains. It can have its own calibration schedule too."
+              : "A single item under calibration control."
+        }
+        actions={
+          <>
+            <Button variant="tertiary" onPress={() => navigate(-1)} isDisabled={saving}>
+              Cancel
+            </Button>
+            <Button type="submit" isPending={saving}>
+              {editing ? "Save changes" : `Create ${kindLabel}`}
+            </Button>
+          </>
+        }
+      />
+
+      {formError && (
+        <Alert status={formError.kind === "conflict" ? "warning" : "danger"} className="mb-6">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>
+              {formError.kind === "conflict" ? "Someone else changed this item" : "Couldn't save"}
+            </Alert.Title>
+            <Alert.Description>{formError.message}</Alert.Description>
+          </Alert.Content>
+          {formError.kind === "conflict" && (
+            <Button size="sm" variant="secondary" onPress={() => window.location.reload()}>
+              Reload
+            </Button>
+          )}
+        </Alert>
+      )}
+
+      <div className="w-full rounded-2xl bg-surface p-6">
+        <FormSection title="Identification">
+          <div className="flex flex-col gap-2 md:col-span-2">
+            <Label>Type</Label>
+            <ToggleButtonGroup
+              aria-label="Type"
+              selectionMode="single"
+              disallowEmptySelection
+              selectedKeys={[form.kind]}
+              onSelectionChange={(keys) => {
+                const [k] = [...keys];
+                if (k) set("kind", k as AssetKind);
+              }}
+              isDisabled={hasChildren}
+            >
+              <ToggleButton id="instrument">
+                <Gauge className="size-4" /> Instrument
+              </ToggleButton>
+              <ToggleButton id="system">
+                <Boxes className="size-4" /> System
+              </ToggleButton>
+            </ToggleButtonGroup>
+            {(hasChildren || errors.kind) && (
+              <p className={`text-xs ${errors.kind ? "text-danger" : "text-muted"}`}>
+                {errors.kind ?? "This System contains items, so it can't be changed to an Instrument."}
+              </p>
+            )}
+          </div>
+          <TextInput
+            label="Asset tag"
+            value={form.asset_tag}
+            onChange={(v) => set("asset_tag", v)}
+            error={errors.asset_tag}
+            isRequired
+            maxLength={64}
+            autoFocus={!editing}
+            placeholder="e.g. DMM-0042"
+          />
+          {form.kind === "instrument" ? (
+            <SelectInput
+              label="Part of System"
+              value={form.parent_id}
+              onChange={(v) => set("parent_id", v)}
+              options={systemOptions}
+              error={errors.parent_id}
+              placeholder="Standalone"
+            />
+          ) : (
+            <div />
+          )}
+          <TextInput
+            label="Description"
+            value={form.description}
+            onChange={(v) => set("description", v)}
+            error={errors.description}
+            isRequired
+            className="md:col-span-2"
+            placeholder="e.g. Digital multimeter"
+          />
+          <SelectInput
+            label="Manufacturer"
+            value={form.manufacturer_id}
+            onChange={(v) => set("manufacturer_id", v)}
+            options={lookupOptions(lookups.data, "manufacturer", form.manufacturer_id)}
+            error={errors.manufacturer_id}
+          />
+          <TextInput
+            label="Model number"
+            value={form.model_number}
+            onChange={(v) => set("model_number", v)}
+            error={errors.model_number}
+          />
+          <TextInput
+            label="Serial number"
+            value={form.serial_number}
+            onChange={(v) => set("serial_number", v)}
+            error={errors.serial_number}
+          />
+        </FormSection>
+
+        <FormSection title="Assignment" description="Where the item is and who is responsible for it.">
+          <SelectInput
+            label="Status"
+            value={form.status_id}
+            onChange={(v) => set("status_id", v)}
+            options={lookupOptions(lookups.data, "status", form.status_id)}
+            error={errors.status_id}
+            isRequired
+          />
+          <SelectInput
+            label="Location"
+            value={form.location_id}
+            onChange={(v) => set("location_id", v)}
+            options={lookupOptions(lookups.data, "location", form.location_id)}
+            error={errors.location_id}
+          />
+          <SelectInput
+            label="Department"
+            value={form.department_id}
+            onChange={(v) => set("department_id", v)}
+            options={lookupOptions(lookups.data, "department", form.department_id)}
+            error={errors.department_id}
+          />
+          <SelectInput
+            label="Owner"
+            value={form.owner_id}
+            onChange={(v) => set("owner_id", v)}
+            options={lookupOptions(lookups.data, "owner", form.owner_id)}
+            error={errors.owner_id}
+          />
+        </FormSection>
+
+        <FormSection
+          title="Calibration schedule"
+          description="The next calibration date is calculated from the last calibration date plus the interval."
+        >
+          <div className="grid grid-cols-[1fr_140px] items-start gap-3">
+            <NumberInput
+              label="Calibration interval"
+              value={form.interval_value}
+              onChange={(v) => set("interval_value", v)}
+              minValue={1}
+              error={errors.cal_interval}
+              description="Leave empty if the item has no fixed cycle."
+            />
+            <SelectInput<IntervalUnit>
+              label="Unit"
+              value={form.interval_unit}
+              onChange={(v) => v && set("interval_unit", v)}
+              options={[
+                { id: "months", label: "Months" },
+                { id: "days", label: "Days" },
+              ]}
+              isRequired
+              allowEmpty={false}
+            />
+          </div>
+          <DateInput
+            label="Date put into service"
+            value={form.in_service_date}
+            onChange={(v) => set("in_service_date", v)}
+            error={errors.in_service_date}
+          />
+          <DateInput
+            label="First calibration"
+            value={form.first_cal_date}
+            onChange={(v) => set("first_cal_date", v)}
+            error={errors.first_cal_date}
+            description="Filled in automatically from the earliest known calibration if left empty."
+          />
+          {hasRecords ? (
+            <DateInput
+              label="Last calibration"
+              value={original?.last_cal_date ?? null}
+              onChange={() => {}}
+              isDisabled
+              description="Set by the latest calibration record."
+            />
+          ) : (
+            <DateInput
+              label="Last calibration"
+              value={form.last_cal_date}
+              onChange={(v) => set("last_cal_date", v)}
+              error={errors.last_cal_date}
+              description="For items brought over from another system. Once a calibration is recorded, the latest record sets this date."
+            />
+          )}
+          <DateInput
+            label="Warranty ends"
+            value={form.warranty_end_date}
+            onChange={(v) => set("warranty_end_date", v)}
+            error={errors.warranty_end_date}
+          />
+          {editing && original && (
+            <div className="flex flex-col justify-center gap-1 text-sm">
+              <span className="text-muted">Next calibration (currently)</span>
+              <span className="font-medium">{formatDate(original.next_cal_date)}</span>
+            </div>
+          )}
+        </FormSection>
+
+        <FormSection title="Notes">
+          <TextAreaInput
+            label="Notes"
+            value={form.notes}
+            onChange={(v) => set("notes", v)}
+            className="md:col-span-2"
+            rows={4}
+          />
+        </FormSection>
+      </div>
+    </Form>
+  );
+}

@@ -2,6 +2,8 @@ mod commands;
 mod config;
 mod state;
 
+use std::path::PathBuf;
+
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -9,8 +11,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let config_dir = app.path().app_config_dir()?;
-            let data_dir = app.path().app_data_dir()?;
+            // POLARISCAL_HOME points config and data at another folder, so test
+            // and demo runs never touch the real database in %APPDATA%.
+            let (config_dir, data_dir) = match std::env::var_os("POLARISCAL_HOME") {
+                Some(home) => (PathBuf::from(&home), PathBuf::from(home)),
+                None => (app.path().app_config_dir()?, app.path().app_data_dir()?),
+            };
             let state =
                 tauri::async_runtime::block_on(state::AppState::initialize(&config_dir, &data_dir));
             app.manage(state);

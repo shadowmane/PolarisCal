@@ -104,7 +104,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = sqlite().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, "sqlite");
-    assert_eq!(info.schema_version, 1);
+    assert_eq!(info.schema_version, 2);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -483,4 +483,40 @@ async fn search_and_archive_filtering() {
         ..Default::default()
     };
     assert_eq!(s.list_assets(&all).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn entered_last_date_returns_when_all_records_are_archived() {
+    let h = sqlite().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let mut input = asset_input(s, "LEGACY-1", AssetKind::Instrument).await;
+    input.last_cal_date = Some(d(2026, 3, 15));
+    let a = s.create_asset(input).await.unwrap();
+    assert_eq!(a.next_cal_date, Some(d(2027, 3, 15)));
+
+    let rec = s
+        .create_calibration(cal(a.id, vendor, d(2026, 11, 18)))
+        .await
+        .unwrap();
+    let a = s.get_asset(a.id).await.unwrap();
+    assert_eq!(
+        a.first_cal_date,
+        Some(d(2026, 3, 15)),
+        "earliest known calibration"
+    );
+    assert_eq!(a.last_cal_date, Some(d(2026, 11, 18)));
+    assert_eq!(a.last_cal_date_entered, Some(d(2026, 3, 15)));
+    assert_eq!(a.next_cal_date, Some(d(2027, 11, 18)));
+
+    s.set_calibration_archived(rec.id, rec.row_version, true)
+        .await
+        .unwrap();
+    let a = s.get_asset(a.id).await.unwrap();
+    assert_eq!(
+        a.last_cal_date,
+        Some(d(2026, 3, 15)),
+        "falls back to the entered date"
+    );
+    assert_eq!(a.next_cal_date, Some(d(2027, 3, 15)));
 }

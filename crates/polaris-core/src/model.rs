@@ -129,7 +129,12 @@ pub struct Asset {
     pub cal_interval: Option<CalInterval>,
     pub in_service_date: Option<NaiveDate>,
     pub first_cal_date: Option<NaiveDate>,
+    /// Derived: the latest calibration record's date, or `last_cal_date_entered`
+    /// while the item has no (non-archived) records.
     pub last_cal_date: Option<NaiveDate>,
+    /// The last calibration date a user typed in, e.g. for items brought over from
+    /// another system. Kept separately so it returns if every record is archived.
+    pub last_cal_date_entered: Option<NaiveDate>,
     /// Derived: last calibration date plus the interval. Never set directly.
     pub next_cal_date: Option<NaiveDate>,
     pub due_status: DueStatus,
@@ -161,8 +166,9 @@ pub struct AssetInput {
     pub in_service_date: Option<NaiveDate>,
     /// Filled in from the earliest calibration record if left empty.
     pub first_cal_date: Option<NaiveDate>,
-    /// Only used while the item has no calibration records; afterwards the
-    /// latest record's date wins.
+    /// The last calibration before PolarisCal tracked the item. It is the item's
+    /// last calibration date only while it has no calibration records; afterwards
+    /// the latest record's date wins, but this value is kept.
     pub last_cal_date: Option<NaiveDate>,
     pub notes: Option<String>,
 }

@@ -8,7 +8,7 @@ number, and its condition as received and as returned.
 It runs as a standalone desktop app on a local SQLite database. Support for shared PostgreSQL, SQL
 Server, and MySQL/MariaDB databases is on the roadmap.
 
-> **Status:** early development (Phase 1 of 6). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> **Status:** early development (Phase 2 of 6). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for the design, the business rules, and the roadmap.
 
 ## Tech stack
@@ -44,11 +44,19 @@ npm run tauri dev
 On first launch the app creates its config and database under
 `%APPDATA%\com.polariscal.desktop\`.
 
+To try things without touching that database, point the app at a scratch folder:
+
+```powershell
+$env:POLARISCAL_HOME = "C:\temp\polariscal-test"
+npm run tauri dev
+```
+
 ### Test
 
 ```powershell
 cargo test --workspace     # Rust unit and store contract tests; also regenerates src/bindings
 npm run build              # TypeScript type-check and production frontend build
+npm test                   # frontend unit tests (Vitest)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```

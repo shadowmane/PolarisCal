@@ -163,7 +163,7 @@ macro_rules! asset_select {
                 a.owner_id, o.name AS owner_name,
                 a.status_id, s.name AS status_name, s.tracks_due AS status_tracks_due,
                 a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit,
-                a.in_service_date, a.first_cal_date, a.last_cal_date, a.next_cal_date,
+                a.in_service_date, a.first_cal_date, a.last_cal_date, a.last_cal_date_entered, a.next_cal_date,
                 (SELECT COUNT(*) FROM assets c WHERE c.parent_id = a.id AND c.is_archived = 0) AS child_count,
                 a.notes, a.is_archived, a.row_version, a.created_at, a.updated_at
          FROM assets a
@@ -206,6 +206,7 @@ fn map_asset(row: &SqliteRow, today: NaiveDate) -> Result<Asset> {
         in_service_date: get(row, "in_service_date")?,
         first_cal_date: get(row, "first_cal_date")?,
         last_cal_date: get(row, "last_cal_date")?,
+        last_cal_date_entered: get(row, "last_cal_date_entered")?,
         next_cal_date,
         due_status: due_status(next_cal_date, tracks_due, today),
         child_count: get(row, "child_count")?,
@@ -270,7 +271,7 @@ async fn check_hierarchy(
 /// Re-derives an asset's first/last/next calibration dates from its records.
 async fn recompute_asset_dates(tx: &mut Transaction<'static, Sqlite>, asset_id: Id) -> Result<()> {
     let row = sqlx::query(
-        "SELECT first_cal_date, last_cal_date, cal_interval_value, cal_interval_unit
+        "SELECT first_cal_date, last_cal_date_entered, cal_interval_value, cal_interval_unit
          FROM assets WHERE id = ?1",
     )
     .bind(asset_id)
@@ -292,7 +293,7 @@ async fn recompute_asset_dates(tx: &mut Transaction<'static, Sqlite>, asset_id: 
 
     let derived = derive_dates(
         get(&row, "first_cal_date")?,
-        get(&row, "last_cal_date")?,
+        get(&row, "last_cal_date_entered")?,
         &record_dates,
         interval_from(
             get(&row, "cal_interval_value")?,
@@ -646,8 +647,9 @@ impl Store for SqliteStore {
                 asset_tag, kind, parent_id, description, manufacturer_id, model_number, serial_number,
                 location_id, department_id, owner_id, status_id, warranty_end_date,
                 cal_interval_value, cal_interval_unit, in_service_date,
-                first_cal_date, last_cal_date, next_cal_date, notes, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20)
+                first_cal_date, last_cal_date, next_cal_date, notes, created_at, updated_at,
+                last_cal_date_entered)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, ?21)
              RETURNING id",
         )
         .bind(&input.asset_tag)
@@ -670,6 +672,7 @@ impl Store for SqliteStore {
         .bind(derived.next_cal_date)
         .bind(&input.notes)
         .bind(Utc::now())
+        .bind(input.last_cal_date)
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| write_err(e, || format!("Asset tag '{}' is already in use.", input.asset_tag)))?;
@@ -694,7 +697,7 @@ impl Store for SqliteStore {
                 model_number = ?8, serial_number = ?9, location_id = ?10, department_id = ?11,
                 owner_id = ?12, status_id = ?13, warranty_end_date = ?14,
                 cal_interval_value = ?15, cal_interval_unit = ?16, in_service_date = ?17,
-                first_cal_date = ?18, last_cal_date = ?19, notes = ?20, updated_at = ?21,
+                first_cal_date = ?18, last_cal_date_entered = ?19, notes = ?20, updated_at = ?21,
                 row_version = row_version + 1
              WHERE id = ?1 AND row_version = ?2",
         )

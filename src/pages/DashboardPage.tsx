@@ -1,6 +1,7 @@
 import { Card, Table } from "@heroui/react";
 import { CalendarCheck, CalendarClock, CircleAlert, CircleCheck, CircleDashed, Clock } from "lucide-react";
 import type { ReactNode } from "react";
+import { useNavigate } from "react-router";
 import type { Asset } from "../bindings/Asset";
 import { EmptyNote, ErrorAlert, Loading, PageHeader, StatusChip } from "../components/common";
 import { api } from "../lib/api";
@@ -37,10 +38,14 @@ function StatCard({
 }
 
 function AttentionTable({ assets }: { assets: Asset[] }) {
+  const navigate = useNavigate();
   return (
     <Table>
       <Table.ScrollContainer>
-        <Table.Content aria-label="Items overdue or due within 30 days">
+        <Table.Content
+          aria-label="Items overdue or due within 30 days"
+          onRowAction={(key) => navigate(`/assets/${key}`)}
+        >
           <Table.Header>
             <Table.Column isRowHeader>Asset tag</Table.Column>
             <Table.Column>Description</Table.Column>
@@ -57,7 +62,7 @@ function AttentionTable({ assets }: { assets: Asset[] }) {
             )}
           >
             {(a) => (
-              <Table.Row id={a.id}>
+              <Table.Row id={a.id} className="cursor-pointer">
                 <Table.Cell className="font-medium">{a.asset_tag}</Table.Cell>
                 <Table.Cell>{a.description}</Table.Cell>
                 <Table.Cell>{a.location_name ?? EMPTY}</Table.Cell>

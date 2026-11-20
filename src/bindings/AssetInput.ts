@@ -11,7 +11,8 @@ export type AssetInput = { asset_tag: string, kind: AssetKind, parent_id: number
  */
 first_cal_date: string | null, 
 /**
- * Only used while the item has no calibration records; afterwards the
- * latest record's date wins.
+ * The last calibration before PolarisCal tracked the item. It is the item's
+ * last calibration date only while it has no calibration records; afterwards
+ * the latest record's date wins, but this value is kept.
  */
 last_cal_date: string | null, notes: string | null, };

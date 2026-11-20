@@ -1,0 +1,360 @@
+import { Alert, Button, Card, Chip, Table, toast } from "@heroui/react";
+import { ArrowLeft, Boxes, ClipboardCheck, Gauge, Pencil, Plus } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router";
+import type { Asset } from "../bindings/Asset";
+import type { CalibrationRecord } from "../bindings/CalibrationRecord";
+import { CalibrationDialog } from "../components/CalibrationDialog";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ToggleSwitch } from "../components/fields";
+import { EmptyNote, ErrorAlert, Loading, StatusChip } from "../components/common";
+import { ApiError, api } from "../lib/api";
+import {
+  conditionReceivedMeta,
+  conditionReturnedMeta,
+  dueStatusMeta,
+  EMPTY,
+  formatCents,
+  formatDate,
+  formatInterval,
+} from "../lib/format";
+import { useAsync } from "../lib/useAsync";
+
+function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <dt className="text-xs text-muted">{label}</dt>
+      <dd className="text-sm break-words">{children ?? EMPTY}</dd>
+    </div>
+  );
+}
+
+function ChildrenCard({ system }: { system: Asset }) {
+  const navigate = useNavigate();
+  const children = useAsync(() => api.listAssets({ parent_id: system.id }), [system.id, system.row_version]);
+  return (
+    <Card>
+      <Card.Header className="flex-row items-center justify-between">
+        <div>
+          <Card.Title>Contained instruments</Card.Title>
+          <Card.Description>Each instrument keeps its own calibration schedule.</Card.Description>
+        </div>
+        {!system.is_archived && (
+          <Button
+            size="sm"
+            variant="secondary"
+            onPress={() => navigate(`/assets/new?kind=instrument&parent=${system.id}`)}
+          >
+            <Plus className="size-4" /> Add instrument
+          </Button>
+        )}
+      </Card.Header>
+      <Card.Content>
+        {children.error && <ErrorAlert error={children.error} onRetry={children.reload} />}
+        <Table variant="secondary">
+          <Table.ScrollContainer>
+            <Table.Content aria-label="Contained instruments" onRowAction={(key) => navigate(`/assets/${key}`)}>
+              <Table.Header>
+                <Table.Column isRowHeader>Asset tag</Table.Column>
+                <Table.Column>Description</Table.Column>
+                <Table.Column>Status</Table.Column>
+                <Table.Column>Next due</Table.Column>
+              </Table.Header>
+              <Table.Body
+                items={children.data ?? []}
+                renderEmptyState={() => (
+                  <EmptyNote icon={<Gauge className="size-5" />} title="No instruments in this System yet" />
+                )}
+              >
+                {(a) => (
+                  <Table.Row id={a.id} className="cursor-pointer">
+                    <Table.Cell className="font-medium">{a.asset_tag}</Table.Cell>
+                    <Table.Cell>{a.description}</Table.Cell>
+                    <Table.Cell>{a.status_name}</Table.Cell>
+                    <Table.Cell>
+                      <div className="flex items-center gap-2">
+                        {formatDate(a.next_cal_date)}
+                        {(a.due_status === "overdue" || a.due_status === "due_soon") && (
+                          <StatusChip color={dueStatusMeta[a.due_status].color}>
+                            {dueStatusMeta[a.due_status].label}
+                          </StatusChip>
+                        )}
+                      </div>
+                    </Table.Cell>
+                  </Table.Row>
+                )}
+              </Table.Body>
+            </Table.Content>
+          </Table.ScrollContainer>
+        </Table>
+      </Card.Content>
+    </Card>
+  );
+}
+
+function HistoryCard({
+  asset,
+  version,
+  onEdit,
+  onAdd,
+}: {
+  asset: Asset;
+  version: number;
+  onEdit: (r: CalibrationRecord) => void;
+  onAdd: () => void;
+}) {
+  const [showArchived, setShowArchived] = useState(false);
+  const records = useAsync(
+    () => api.listCalibrations({ asset_id: asset.id, include_archived: showArchived }),
+    [asset.id, showArchived, version],
+  );
+  const byId = new Map((records.data ?? []).map((r) => [r.id, r]));
+
+  return (
+    <Card>
+      <Card.Header className="flex-row items-center justify-between">
+        <div>
+          <Card.Title>Calibration history</Card.Title>
+          <Card.Description>Newest first. Select a record to view or edit it.</Card.Description>
+        </div>
+        <div className="flex items-center gap-4">
+          <ToggleSwitch label="Show archived" isSelected={showArchived} onChange={setShowArchived} />
+          {!asset.is_archived && (
+            <Button size="sm" variant="secondary" onPress={onAdd}>
+              <Plus className="size-4" /> Record calibration
+            </Button>
+          )}
+        </div>
+      </Card.Header>
+      <Card.Content>
+        {records.error && <ErrorAlert error={records.error} onRetry={records.reload} />}
+        <Table variant="secondary">
+          <Table.ScrollContainer>
+            <Table.Content
+              aria-label="Calibration history"
+              onRowAction={(key) => {
+                const r = byId.get(Number(key));
+                if (r) onEdit(r);
+              }}
+            >
+              <Table.Header>
+                <Table.Column isRowHeader>Date</Table.Column>
+                <Table.Column>Calibrated by</Table.Column>
+                <Table.Column>Certificate</Table.Column>
+                <Table.Column>As received</Table.Column>
+                <Table.Column>As returned</Table.Column>
+                <Table.Column>Cost</Table.Column>
+                <Table.Column>Due date set</Table.Column>
+              </Table.Header>
+              <Table.Body
+                items={records.data ?? []}
+                renderEmptyState={() => (
+                  <EmptyNote icon={<ClipboardCheck className="size-5" />} title="No calibrations recorded" />
+                )}
+              >
+                {(r) => (
+                  <Table.Row id={r.id} className={`cursor-pointer ${r.is_archived ? "opacity-55" : ""}`}>
+                    <Table.Cell className="font-medium">
+                      {formatDate(r.cal_date)}
+                      {r.is_archived && <span className="ml-2 text-xs text-muted">(archived)</span>}
+                    </Table.Cell>
+                    <Table.Cell>
+                      {r.provider_name}
+                      {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
+                    </Table.Cell>
+                    <Table.Cell>{r.certificate_number ?? EMPTY}</Table.Cell>
+                    <Table.Cell>
+                      <StatusChip color={conditionReceivedMeta[r.condition_received].color}>
+                        {conditionReceivedMeta[r.condition_received].label}
+                      </StatusChip>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <StatusChip color={conditionReturnedMeta[r.condition_returned].color}>
+                        {conditionReturnedMeta[r.condition_returned].label}
+                      </StatusChip>
+                    </Table.Cell>
+                    <Table.Cell>{formatCents(r.cost_cents)}</Table.Cell>
+                    <Table.Cell>{formatDate(r.next_due_date)}</Table.Cell>
+                  </Table.Row>
+                )}
+              </Table.Body>
+            </Table.Content>
+          </Table.ScrollContainer>
+        </Table>
+      </Card.Content>
+    </Card>
+  );
+}
+
+export function AssetDetailPage() {
+  const { id } = useParams();
+  const assetId = Number(id);
+  const navigate = useNavigate();
+  const { data: asset, error, loading, reload } = useAsync(() => api.getAsset(assetId), [assetId]);
+
+  const [dialog, setDialog] = useState<{ open: boolean; record?: CalibrationRecord }>({ open: false });
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [archiveError, setArchiveError] = useState<ApiError>();
+  // Bumped after any save so the history and children re-load.
+  const [version, setVersion] = useState(0);
+
+  if (error) return <ErrorAlert error={error} onRetry={reload} />;
+  if (loading && !asset) return <Loading />;
+  if (!asset) return null;
+
+  const due = dueStatusMeta[asset.due_status];
+  const isSystem = asset.kind === "system";
+
+  async function toggleArchived() {
+    setArchiveError(undefined);
+    try {
+      const saved = await api.setAssetArchived(asset!.id, asset!.row_version, !asset!.is_archived);
+      toast.success(saved.is_archived ? `${saved.asset_tag} archived` : `${saved.asset_tag} restored`);
+      reload();
+    } catch (e) {
+      setArchiveError(e instanceof ApiError ? e : new ApiError("database", String(e)));
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div>
+        <Link
+          to="/assets"
+          className="mb-3 inline-flex items-center gap-1.5 text-sm text-muted hover:text-foreground"
+        >
+          <ArrowLeft className="size-4" /> Instruments & Systems
+        </Link>
+        <header className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {isSystem ? <Boxes className="size-6 text-muted" /> : <Gauge className="size-6 text-muted" />}
+              <h1 className="text-2xl font-semibold tracking-tight">{asset.asset_tag}</h1>
+              <Chip size="sm" variant="secondary">
+                {isSystem ? "System" : "Instrument"}
+              </Chip>
+              <Chip size="sm" variant="soft" color={due.color}>
+                {due.label}
+              </Chip>
+            </div>
+            <p className="mt-1 text-sm text-muted">{asset.description}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {!asset.is_archived && (
+              <Button onPress={() => setDialog({ open: true })}>
+                <ClipboardCheck className="size-4" /> Record calibration
+              </Button>
+            )}
+            <Button variant="secondary" onPress={() => navigate(`/assets/${asset.id}/edit`)}>
+              <Pencil className="size-4" /> Edit
+            </Button>
+            <Button
+              variant={asset.is_archived ? "secondary" : "ghost"}
+              onPress={() => (asset.is_archived ? void toggleArchived() : setConfirmArchive(true))}
+            >
+              {asset.is_archived ? "Restore" : "Archive"}
+            </Button>
+          </div>
+        </header>
+      </div>
+
+      {asset.is_archived && (
+        <Alert status="warning">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Title>This item is archived</Alert.Title>
+            <Alert.Description>
+              It's hidden from lists and due tracking. Restore it to record new calibrations.
+            </Alert.Description>
+          </Alert.Content>
+        </Alert>
+      )}
+      {archiveError && <ErrorAlert error={archiveError} />}
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[3fr_2fr]">
+        <Card>
+          <Card.Header>
+            <Card.Title>Details</Card.Title>
+          </Card.Header>
+          <Card.Content>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-3">
+              <Detail label="Manufacturer">{asset.manufacturer_name}</Detail>
+              <Detail label="Model number">{asset.model_number}</Detail>
+              <Detail label="Serial number">{asset.serial_number}</Detail>
+              <Detail label="Status">{asset.status_name}</Detail>
+              <Detail label="Location">{asset.location_name}</Detail>
+              <Detail label="Department">{asset.department_name}</Detail>
+              <Detail label="Owner">{asset.owner_name}</Detail>
+              {!isSystem && (
+                <Detail label="Part of System">
+                  {asset.parent_id ? (
+                    <Link to={`/assets/${asset.parent_id}`} className="font-medium text-accent hover:underline">
+                      {asset.parent_tag}
+                    </Link>
+                  ) : (
+                    "Standalone"
+                  )}
+                </Detail>
+              )}
+              <Detail label="Warranty ends">{formatDate(asset.warranty_end_date)}</Detail>
+            </dl>
+            {asset.notes && (
+              <div className="mt-5 border-t border-separator pt-4">
+                <div className="mb-1 text-xs text-muted">Notes</div>
+                <p className="text-sm whitespace-pre-wrap">{asset.notes}</p>
+              </div>
+            )}
+          </Card.Content>
+        </Card>
+
+        <Card>
+          <Card.Header>
+            <Card.Title>Calibration</Card.Title>
+          </Card.Header>
+          <Card.Content>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-4">
+              <Detail label="Next calibration">
+                <span className="text-base font-semibold">{formatDate(asset.next_cal_date)}</span>
+              </Detail>
+              <Detail label="Interval">{formatInterval(asset.cal_interval)}</Detail>
+              <Detail label="Last calibration">{formatDate(asset.last_cal_date)}</Detail>
+              <Detail label="First calibration">{formatDate(asset.first_cal_date)}</Detail>
+              <Detail label="Put into service">{formatDate(asset.in_service_date)}</Detail>
+            </dl>
+          </Card.Content>
+        </Card>
+      </div>
+
+      {isSystem && <ChildrenCard system={asset} />}
+
+      <HistoryCard
+        asset={asset}
+        version={version}
+        onAdd={() => setDialog({ open: true })}
+        onEdit={(record) => setDialog({ open: true, record })}
+      />
+
+      <CalibrationDialog
+        isOpen={dialog.open}
+        onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
+        record={dialog.record}
+        asset={asset}
+        onSaved={() => {
+          setVersion((v) => v + 1);
+          reload();
+        }}
+      />
+
+      <ConfirmDialog
+        isOpen={confirmArchive}
+        onOpenChange={setConfirmArchive}
+        title={`Archive ${asset.asset_tag}?`}
+        confirmLabel="Archive"
+        onConfirm={toggleArchived}
+      >
+        Archived items are hidden from lists and due tracking. Their calibration history is kept, and you can
+        restore them at any time.
+      </ConfirmDialog>
+    </div>
+  );
+}

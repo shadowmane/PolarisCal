@@ -1,0 +1,357 @@
+// Form fields built from HeroUI v3 parts, wired for controlled state and
+// server-side validation messages (`error` shows below the field).
+
+import {
+  Calendar,
+  DateField,
+  DatePicker,
+  Description,
+  FieldError,
+  Input,
+  Label,
+  ListBox,
+  NumberField,
+  Select,
+  Switch,
+  TextArea,
+  TextField,
+} from "@heroui/react";
+import { X } from "lucide-react";
+import type { ReactNode } from "react";
+import { fromDateValue, toDateValue } from "../lib/forms";
+
+interface BaseProps {
+  label: string;
+  error?: string;
+  description?: ReactNode;
+  isRequired?: boolean;
+  isDisabled?: boolean;
+  className?: string;
+}
+
+export function TextInput({
+  label,
+  value,
+  onChange,
+  error,
+  description,
+  isRequired,
+  isDisabled,
+  className,
+  placeholder,
+  autoFocus,
+  maxLength,
+}: BaseProps & {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+  maxLength?: number;
+}) {
+  return (
+    <TextField
+      variant="secondary"
+      value={value}
+      onChange={onChange}
+      isRequired={isRequired}
+      isDisabled={isDisabled}
+      isInvalid={!!error}
+      validationBehavior="aria"
+      className={className}
+      autoFocus={autoFocus}
+      maxLength={maxLength}
+    >
+      <Label>{label}</Label>
+      <Input placeholder={placeholder} />
+      {description && <Description>{description}</Description>}
+      <FieldError>{error}</FieldError>
+    </TextField>
+  );
+}
+
+export function TextAreaInput({
+  label,
+  value,
+  onChange,
+  error,
+  description,
+  isDisabled,
+  className,
+  rows = 3,
+  placeholder,
+}: BaseProps & { value: string; onChange: (v: string) => void; rows?: number; placeholder?: string }) {
+  return (
+    <TextField
+      variant="secondary"
+      value={value}
+      onChange={onChange}
+      isDisabled={isDisabled}
+      isInvalid={!!error}
+      validationBehavior="aria"
+      className={className}
+    >
+      <Label>{label}</Label>
+      <TextArea rows={rows} placeholder={placeholder} />
+      {description && <Description>{description}</Description>}
+      <FieldError>{error}</FieldError>
+    </TextField>
+  );
+}
+
+export function NumberInput({
+  label,
+  value,
+  onChange,
+  error,
+  description,
+  isRequired,
+  isDisabled,
+  className,
+  minValue,
+  formatOptions,
+  step,
+  "aria-label": ariaLabel,
+}: Omit<BaseProps, "label"> & {
+  label?: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+  minValue?: number;
+  step?: number;
+  formatOptions?: Intl.NumberFormatOptions;
+  "aria-label"?: string;
+}) {
+  return (
+    <NumberField
+      variant="secondary"
+      value={value ?? Number.NaN}
+      onChange={(v) => onChange(v == null || Number.isNaN(v) ? null : v)}
+      isRequired={isRequired}
+      isDisabled={isDisabled}
+      isInvalid={!!error}
+      validationBehavior="aria"
+      minValue={minValue}
+      step={step}
+      formatOptions={formatOptions}
+      className={className}
+      aria-label={ariaLabel}
+    >
+      {label && <Label>{label}</Label>}
+      <NumberField.Group>
+        <NumberField.Input />
+      </NumberField.Group>
+      {description && <Description>{description}</Description>}
+      <FieldError>{error}</FieldError>
+    </NumberField>
+  );
+}
+
+export function MoneyInput(props: Omit<Parameters<typeof NumberInput>[0], "formatOptions" | "minValue">) {
+  return (
+    <NumberInput
+      {...props}
+      minValue={0}
+      step={0.01}
+      formatOptions={{ style: "currency", currency: "USD", currencyDisplay: "symbol" }}
+    />
+  );
+}
+
+export function DateInput({
+  label,
+  value,
+  onChange,
+  error,
+  description,
+  isRequired,
+  isDisabled,
+  className,
+}: BaseProps & { value: string | null; onChange: (v: string | null) => void }) {
+  return (
+    <DatePicker
+      value={toDateValue(value)}
+      onChange={(v) => onChange(fromDateValue(v))}
+      isRequired={isRequired}
+      isDisabled={isDisabled}
+      isInvalid={!!error}
+      validationBehavior="aria"
+      className={className}
+      granularity="day"
+    >
+      <Label>{label}</Label>
+      <DateField.Group variant="secondary">
+        <DateField.Input>{(segment) => <DateField.Segment segment={segment} />}</DateField.Input>
+        <DateField.Suffix>
+          {value && !isDisabled && (
+            // A plain <button>: a HeroUI/RAC Button here would become the picker trigger.
+            <button
+              type="button"
+              aria-label={`Clear ${label}`}
+              className="grid size-6 place-items-center rounded-md text-muted hover:bg-default hover:text-foreground"
+              onClick={() => onChange(null)}
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+          <DatePicker.Trigger>
+            <DatePicker.TriggerIndicator />
+          </DatePicker.Trigger>
+        </DateField.Suffix>
+      </DateField.Group>
+      {description && <Description>{description}</Description>}
+      <FieldError>{error}</FieldError>
+      <DatePicker.Popover>
+        <Calendar aria-label={label}>
+          <Calendar.Header>
+            <Calendar.YearPickerTrigger>
+              <Calendar.YearPickerTriggerHeading />
+              <Calendar.YearPickerTriggerIndicator />
+            </Calendar.YearPickerTrigger>
+            <Calendar.NavButton slot="previous" />
+            <Calendar.NavButton slot="next" />
+          </Calendar.Header>
+          <Calendar.Grid>
+            <Calendar.GridHeader>{(day) => <Calendar.HeaderCell>{day}</Calendar.HeaderCell>}</Calendar.GridHeader>
+            <Calendar.GridBody>{(date) => <Calendar.Cell date={date} />}</Calendar.GridBody>
+          </Calendar.Grid>
+        </Calendar>
+      </DatePicker.Popover>
+    </DatePicker>
+  );
+}
+
+export interface Option<K extends string | number> {
+  id: K;
+  label: string;
+  description?: string;
+}
+
+/** Single-choice dropdown. `allowEmpty` adds a clear button for optional fields. */
+export function SelectInput<K extends string | number>({
+  label,
+  value,
+  onChange,
+  options,
+  error,
+  description,
+  isRequired,
+  isDisabled,
+  className,
+  placeholder = "Select…",
+  allowEmpty = !isRequired,
+}: BaseProps & {
+  value: K | null;
+  onChange: (v: K | null) => void;
+  options: Option<K>[];
+  placeholder?: string;
+  allowEmpty?: boolean;
+}) {
+  return (
+    <Select
+      variant="secondary"
+      value={value}
+      onChange={(k) => {
+        if (k == null) return onChange(null);
+        // Keys come back as given for strings, but stringified numbers stay numbers in RAC; normalize.
+        const match = options.find((o) => String(o.id) === String(k));
+        onChange(match ? match.id : null);
+      }}
+      placeholder={placeholder}
+      isRequired={isRequired}
+      isDisabled={isDisabled}
+      isInvalid={!!error}
+      validationBehavior="aria"
+      className={className}
+    >
+      <Label>{label}</Label>
+      <Select.Trigger>
+        <Select.Value />
+        {allowEmpty && value != null && <Select.ClearButton />}
+        <Select.Indicator />
+      </Select.Trigger>
+      {description && <Description>{description}</Description>}
+      <FieldError>{error}</FieldError>
+      <Select.Popover>
+        <ListBox>
+          {options.map((o) => (
+            <ListBox.Item key={String(o.id)} id={o.id} textValue={o.label}>
+              <div className="flex flex-col">
+                <span>{o.label}</span>
+                {o.description && <span className="text-xs text-muted">{o.description}</span>}
+              </div>
+              <ListBox.ItemIndicator />
+            </ListBox.Item>
+          ))}
+        </ListBox>
+      </Select.Popover>
+    </Select>
+  );
+}
+
+export function SwitchInput({
+  label,
+  description,
+  isSelected,
+  onChange,
+  isDisabled,
+}: {
+  label: string;
+  description?: string;
+  isSelected: boolean;
+  onChange: (v: boolean) => void;
+  isDisabled?: boolean;
+}) {
+  return (
+    <Switch isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} className="flex-row items-start gap-3">
+      <Switch.Control className="mt-0.5 shrink-0">
+        <Switch.Thumb />
+      </Switch.Control>
+      <Switch.Content className="flex flex-col items-start gap-0.5">
+        <Label>{label}</Label>
+        {description && <Description>{description}</Description>}
+      </Switch.Content>
+    </Switch>
+  );
+}
+
+/** A small inline on/off switch for filters ("Show archived"). */
+export function ToggleSwitch({
+  label,
+  isSelected,
+  onChange,
+}: {
+  label: string;
+  isSelected: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <Switch size="sm" isSelected={isSelected} onChange={onChange} className="flex-row items-center gap-2">
+      <Switch.Control className="shrink-0">
+        <Switch.Thumb />
+      </Switch.Control>
+      <Switch.Content>
+        <span className="text-sm whitespace-nowrap">{label}</span>
+      </Switch.Content>
+    </Switch>
+  );
+}
+
+/** A titled group of fields laid out on a grid. */
+export function FormSection({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="grid grid-cols-1 gap-x-8 gap-y-4 border-t border-separator py-6 first:border-t-0 first:pt-0 lg:grid-cols-[220px_1fr]">
+      <div>
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {description && <p className="mt-1 text-xs text-muted">{description}</p>}
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{children}</div>
+    </section>
+  );
+}

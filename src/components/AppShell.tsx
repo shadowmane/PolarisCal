@@ -1,4 +1,4 @@
-import { Button, Tooltip, useTheme } from "@heroui/react";
+import { Button, Toast, Tooltip, useTheme } from "@heroui/react";
 import {
   ClipboardCheck,
   Database,
@@ -137,6 +137,7 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
+      <Toast.Provider placement="bottom end" />
     </div>
   );
 }

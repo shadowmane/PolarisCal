@@ -59,9 +59,11 @@ All of these live in `polaris-core` so every backend applies them identically.
 * **Calibration interval** is a number plus a unit (days or months). Month arithmetic clamps
   to the end of the month (Jan 31 + 1 month = Feb 28/29).
 * **Derived dates** (`schedule::derive_dates`):
-  * *first calibration* is a recorded fact: kept if entered, otherwise filled from the earliest record;
-  * *last calibration* is the latest non-archived record's date, or the manually entered
-    value while an item has no records (for items migrated from an older system);
+  * *first calibration* is a recorded fact: kept if entered, otherwise filled with the earliest
+    calibration known (the earliest record, or a last date entered before any records existed);
+  * *last calibration* is the latest non-archived record's date. While an item has no records
+    it is the manually entered value (`last_cal_date_entered`, for items migrated from an older
+    system), which is stored separately so it comes back if every record is archived;
   * *next calibration* is always last + interval and is never edited directly.
 * **Due status**: an item whose status has *tracks due* switched off (Out of Service, Retired,
   Lost, Calibration Not Required) is *not tracked*. Otherwise it is *overdue*, *due soon*
@@ -107,7 +109,7 @@ Settings page instead of crashing.
 ## Roadmap
 
 1. **Foundation** ✅: Tauri/React/HeroUI shell, core model and rules, `Store` trait, SQLite backend and migrations, read-only screens, CI.
-2. **Core data entry**: forms for Instruments/Systems and Calibration Records, list management, detail views with child items and calibration history.
+2. **Core data entry** ✅: forms for Instruments/Systems and Calibration Records, list management, detail views with child items and calibration history.
 3. **Users and audit trail**: logins, roles (Admin / Technician / Viewer), field-level change history.
 4. **Certificates**: attach files from the configured share to records.
 5. **Remote databases**: PostgreSQL, then MySQL/MariaDB, then SQL Server, plus a connection settings screen.

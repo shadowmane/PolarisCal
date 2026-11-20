@@ -1,7 +1,9 @@
-import { SearchField, Table, Tabs } from "@heroui/react";
-import { Boxes, Gauge } from "lucide-react";
+import { Button, SearchField, Table, Tabs } from "@heroui/react";
+import { Boxes, Gauge, Plus } from "lucide-react";
+import { useNavigate } from "react-router";
 import { useDeferredValue, useState } from "react";
 import type { AssetKind } from "../bindings/AssetKind";
+import { ToggleSwitch } from "../components/fields";
 import { EmptyNote, ErrorAlert, Loading, PageHeader, StatusChip } from "../components/common";
 import { api } from "../lib/api";
 import { dueStatusMeta, EMPTY, formatDate, formatInterval } from "../lib/format";
@@ -12,10 +14,17 @@ type KindTab = "all" | AssetKind;
 export function AssetsPage() {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<KindTab>("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const navigate = useNavigate();
   const query = useDeferredValue(search);
   const { data, error, loading, reload } = useAsync(
-    () => api.listAssets({ search: query || null, kind: kind === "all" ? null : kind }),
-    [query, kind],
+    () =>
+      api.listAssets({
+        search: query || null,
+        kind: kind === "all" ? null : kind,
+        include_archived: showArchived,
+      }),
+    [query, kind, showArchived],
   );
 
   return (
@@ -23,6 +32,16 @@ export function AssetsPage() {
       <PageHeader
         title="Instruments & Systems"
         description="Everything under calibration control. Systems group the instruments they contain."
+        actions={
+          <>
+            <Button variant="secondary" onPress={() => navigate("/assets/new?kind=system")}>
+              <Boxes className="size-4" /> New System
+            </Button>
+            <Button onPress={() => navigate("/assets/new")}>
+              <Plus className="size-4" /> New Instrument
+            </Button>
+          </>
+        }
       />
 
       <div className="mb-4 flex items-center justify-between gap-4">
@@ -45,6 +64,8 @@ export function AssetsPage() {
           </Tabs.ListContainer>
         </Tabs>
 
+        <div className="flex items-center gap-4">
+        <ToggleSwitch label="Show archived" isSelected={showArchived} onChange={setShowArchived} />
         <SearchField value={search} onChange={setSearch} aria-label="Search" className="w-80">
           <SearchField.Group>
             <SearchField.SearchIcon />
@@ -52,6 +73,7 @@ export function AssetsPage() {
             <SearchField.ClearButton />
           </SearchField.Group>
         </SearchField>
+        </div>
       </div>
 
       {error && <ErrorAlert error={error} onRetry={reload} />}
@@ -59,7 +81,7 @@ export function AssetsPage() {
       {data && (
         <Table>
           <Table.ScrollContainer>
-            <Table.Content aria-label="Instruments and systems">
+            <Table.Content aria-label="Instruments and systems" onRowAction={(key) => navigate(`/assets/${key}`)}>
               <Table.Header>
                 <Table.Column isRowHeader>Asset tag</Table.Column>
                 <Table.Column>Description</Table.Column>
@@ -79,16 +101,17 @@ export function AssetsPage() {
                   >
                     {query
                       ? `Nothing matches “${query}”.`
-                      : "Adding and editing items comes in the next build phase."}
+                      : "Use New Instrument or New System to add the first one."}
                   </EmptyNote>
                 )}
               >
                 {(a) => (
-                  <Table.Row id={a.id}>
+                  <Table.Row id={a.id} className={`cursor-pointer ${a.is_archived ? "opacity-55" : ""}`}>
                     <Table.Cell>
                       <div className="flex items-center gap-2 font-medium">
                         {a.kind === "system" && <Boxes className="size-4 text-muted" aria-label="System" />}
                         {a.asset_tag}
+                        {a.is_archived && <span className="text-xs font-normal text-muted">(archived)</span>}
                       </div>
                       {a.parent_tag && <div className="text-xs text-muted">in {a.parent_tag}</div>}
                     </Table.Cell>
