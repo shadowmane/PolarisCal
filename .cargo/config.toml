@@ -1,0 +1,5 @@
+[env]
+# ts-rs writes TypeScript bindings here when `cargo test` runs.
+TS_RS_EXPORT_DIR = { value = "src/bindings", relative = true }
+# IDs and cents are i64 but always fit in a JS number; don't emit `bigint`.
+TS_RS_LARGE_INT = "number"

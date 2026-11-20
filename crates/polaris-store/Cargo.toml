@@ -1,0 +1,23 @@
+[package]
+name = "polaris-store"
+description = "PolarisCal database backends implementing polaris_core::Store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["sqlx/sqlite"]
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+polaris-core.workspace = true
+serde.workspace = true
+sqlx.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

@@ -1,0 +1,28 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+
+/* Follow the class/data-theme set by HeroUI's useTheme for the `dark:` variant. */
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font-feature-settings: "tnum" 1; /* aligned digits for tables of dates and numbers */
+  }
+
+  /* Desktop app, not a web page: no text selection on chrome, no overscroll bounce. */
+  nav,
+  header {
+    user-select: none;
+  }
+  html {
+    overscroll-behavior: none;
+  }
+}

@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Build, lint, and test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Builds dist/, which the Tauri crate needs to compile.
+      - name: Type-check and build frontend
+        run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Rust formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      # `cargo test` regenerates src/bindings from the Rust models; they must be committed.
+      - name: TypeScript bindings are up to date
+        shell: bash
+        run: |
+          git add -N src/bindings
+          git diff --exit-code -- src/bindings || {
+            echo "::error::src/bindings is out of date. Run 'cargo test' and commit the result."
+            exit 1
+          }
