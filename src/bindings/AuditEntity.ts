@@ -3,4 +3,4 @@
 /**
  * What an audit entry is about.
  */
-export type AuditEntity = "asset" | "calibration" | "lookup" | "user" | "session" | "settings" | "attachment";
+export type AuditEntity = "asset" | "calibration" | "lookup" | "user" | "session" | "settings" | "attachment" | "database";

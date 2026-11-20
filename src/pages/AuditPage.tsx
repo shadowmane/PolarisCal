@@ -12,7 +12,8 @@ import { auditEntityLabel } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 const PAGE = 100;
-const ENTITIES: AuditEntity[] = ["asset", "calibration", "lookup", "user", "session", "settings"];
+// Every subject the audit trail records, in the order of auditEntityLabel.
+const ENTITIES = Object.keys(auditEntityLabel) as AuditEntity[];
 
 export function AuditPage() {
   const { can } = useAuth();

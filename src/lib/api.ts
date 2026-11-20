@@ -17,6 +17,11 @@ import type { CalibrationFilter } from "../bindings/CalibrationFilter";
 import type { CalibrationInput } from "../bindings/CalibrationInput";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { CommandError } from "../bindings/CommandError";
+import type { ConnectionCheck } from "../bindings/ConnectionCheck";
+import type { ConnectionChoice } from "../bindings/ConnectionChoice";
+import type { ConnectionSettings } from "../bindings/ConnectionSettings";
+import type { CopyReport } from "../bindings/CopyReport";
+import type { DatabaseConfig } from "../bindings/DatabaseConfig";
 import type { DueSummary } from "../bindings/DueSummary";
 import type { ErrorKind } from "../bindings/ErrorKind";
 import type { FieldError } from "../bindings/FieldError";
@@ -24,6 +29,7 @@ import type { LookupInput } from "../bindings/LookupInput";
 import type { LookupItem } from "../bindings/LookupItem";
 import type { LookupKind } from "../bindings/LookupKind";
 import type { NewUser } from "../bindings/NewUser";
+import type { SharedFilePreview } from "../bindings/SharedFilePreview";
 import type { User } from "../bindings/User";
 import type { UserUpdate } from "../bindings/UserUpdate";
 
@@ -164,4 +170,11 @@ export const api = {
   setAttachmentArchived: (id: number, expectedVersion: number, archived: boolean, reason: string) =>
     call<Attachment>("set_attachment_archived", { id, expected_version: expectedVersion, archived, reason }),
   checkAttachmentsFolder: (path: string) => call<void>("check_attachments_folder", { path }),
+
+  // Database connection (this computer) and copying data between databases
+  getConnectionSettings: () => call<ConnectionSettings>("get_connection_settings"),
+  readSharedSettings: (path: string) => call<SharedFilePreview>("read_shared_settings", { path }),
+  testConnection: (choice: ConnectionChoice) => call<ConnectionCheck>("test_connection", { choice }),
+  saveConnection: (choice: ConnectionChoice) => call<ConnectionSettings>("save_connection", { choice }),
+  copyDatabase: (target: DatabaseConfig) => call<CopyReport>("copy_database", { target }),
 };

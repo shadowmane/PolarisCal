@@ -1,9 +1,11 @@
 import { Button, Card, toast, ToggleButton, ToggleButtonGroup, useTheme } from "@heroui/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Monitor, Moon, Sun } from "lucide-react";
+import { ArrowRightLeft, Database, FolderOpen, Monitor, Moon, Sun } from "lucide-react";
 import type { AppSettings } from "../bindings/AppSettings";
 import { type ReactNode, useEffect, useState } from "react";
 import { ErrorAlert, Loading, PageHeader } from "../components/common";
+import { ConnectionDialog, CopyDatabaseDialog } from "../components/DatabaseForms";
+import { STORE_BACKEND_NAMES } from "../lib/database";
 import { ApiError, api } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
 import { NumberInput, TextInput } from "../components/fields";
@@ -193,17 +195,14 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-const BACKEND_NAMES: Record<string, string> = {
-  sqlite: "SQLite (local file)",
-  postgres: "PostgreSQL",
-  mysql: "MySQL / MariaDB",
-  mssql: "Microsoft SQL Server",
-};
-
 export function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.appInfo(), []);
   const { theme, setTheme } = useTheme("system");
   const settings = useAsync(() => api.getSettings(), []);
+  const { can, refresh } = useAuth();
+  const isAdmin = can("admin");
+  const [dialog, setDialog] = useState<"connection" | "copy" | null>(null);
+  const connection = useAsync(() => (isAdmin ? api.getConnectionSettings() : Promise.resolve(null)), [isAdmin]);
 
   return (
     <>
@@ -215,9 +214,11 @@ export function SettingsPage() {
         {data && (
           <Card>
             <Card.Header>
-              <Card.Title>Database</Card.Title>
+              <Card.Title>Database connection</Card.Title>
               <Card.Description>
-                Switching to a remote PostgreSQL, MySQL, or SQL Server database arrives in a later phase.
+                {isAdmin
+                  ? "Where this computer's PolarisCal keeps its data: a SQLite file, or a PostgreSQL, MySQL/MariaDB, or SQL Server database."
+                  : "Where PolarisCal keeps its data. An administrator can change this."}
               </Card.Description>
             </Card.Header>
             <Card.Content>
@@ -225,22 +226,69 @@ export function SettingsPage() {
                 <ErrorAlert error={{ kind: "not_connected", message: data.connection_error }} />
               )}
               <dl className="divide-y divide-separator">
-                <Row label="Configured">{data.database}</Row>
+                <Row label="Connected to">{data.database}</Row>
                 {data.store && (
                   <>
-                    <Row label="Backend">{BACKEND_NAMES[data.store.backend] ?? data.store.backend}</Row>
-                    <Row label="Location">{data.store.location}</Row>
+                    <Row label="Database type">{STORE_BACKEND_NAMES[data.store.backend] ?? data.store.backend}</Row>
                     <Row label="Schema version">{data.store.schema_version}</Row>
                     <Row label="Records">
                       {data.store.asset_count} items · {data.store.calibration_count} calibrations
                     </Row>
                   </>
                 )}
+                {isAdmin && (
+                  <Row label="Settings from">
+                    {connection.data?.shared_settings_file ? (
+                      <>
+                        Shared settings file <span className="text-muted">{connection.data.shared_settings_file}</span>
+                      </>
+                    ) : (
+                      "This computer"
+                    )}
+                  </Row>
+                )}
                 <Row label="Config file">{data.config_path}</Row>
               </dl>
             </Card.Content>
+            {isAdmin && (
+              <Card.Footer className="flex gap-2">
+                <Button variant="secondary" onPress={() => setDialog("connection")}>
+                  <Database className="size-4" /> Change connection…
+                </Button>
+              </Card.Footer>
+            )}
           </Card>
         )}
+
+        {isAdmin && data?.store && (
+          <Card>
+            <Card.Header>
+              <Card.Title>Copy data to another database</Card.Title>
+              <Card.Description>
+                Moves everything, including users and the audit trail, into a new empty database: for example from
+                this SQLite file to a SQL Server, or from a server back to a SQLite file. Row counts are checked
+                afterwards, and the copy is recorded in both audit trails.
+              </Card.Description>
+            </Card.Header>
+            <Card.Footer>
+              <Button variant="secondary" onPress={() => setDialog("copy")}>
+                <ArrowRightLeft className="size-4" /> Copy data…
+              </Button>
+            </Card.Footer>
+          </Card>
+        )}
+
+        <ConnectionDialog
+          isOpen={dialog === "connection"}
+          onOpenChange={(open) => setDialog(open ? "connection" : null)}
+          onSaved={() => void refresh()}
+        />
+        <CopyDatabaseDialog
+          isOpen={dialog === "copy"}
+          onOpenChange={(open) => setDialog(open ? "copy" : null)}
+          currentBackend={data?.store?.backend}
+          onSwitched={() => void refresh()}
+        />
 
         <SecurityCard settings={settings.data} onSaved={settings.reload} />
         <AttachmentsFolderCard settings={settings.data} onSaved={settings.reload} />

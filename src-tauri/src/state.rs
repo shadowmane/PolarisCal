@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use polaris_core::Store;
@@ -17,14 +17,20 @@ pub struct Session {
     pub locked: bool,
 }
 
-/// Shared state handed to every command.
-pub struct AppState {
-    pub config_path: PathBuf,
+/// The database in use. Replaced as a whole when an admin changes the connection.
+#[derive(Clone)]
+pub struct Connection {
     /// Credential-free description of the configured database.
-    pub database_description: String,
+    pub description: String,
     /// The open database, or why it could not be opened. The app still starts
     /// on failure so the UI can show the problem instead of crashing.
     pub store: Result<Arc<dyn Store>, String>,
+}
+
+/// Shared state handed to every command.
+pub struct AppState {
+    pub config_path: PathBuf,
+    connection: RwLock<Connection>,
     pub session: Mutex<Option<Session>>,
     /// Cached from the database settings so idle checks don't need a query.
     pub idle_lock_minutes: AtomicU32,
@@ -42,30 +48,67 @@ impl AppState {
                 );
             }
         };
-        let store = polaris_store::open(&config.database)
-            .await
-            .map_err(|e| e.to_string());
-        let state = Self::new(config_path, config.database.describe(), store);
-        if let Ok(store) = &state.store
-            && let Ok(settings) = store.settings().await
-        {
-            state.set_idle_lock_minutes(settings.idle_lock_minutes);
-        }
+        let (description, store) = match config.effective_database() {
+            Ok(database) => (
+                database.describe(),
+                polaris_store::open(&database)
+                    .await
+                    .map_err(|e| e.to_string()),
+            ),
+            Err(message) => (
+                format!(
+                    "shared settings file {}",
+                    config.shared_settings_file.as_deref().unwrap_or_default()
+                ),
+                Err(message),
+            ),
+        };
+        let state = Self::new(config_path, description, store);
+        state.refresh_idle_lock().await;
         state
     }
 
     pub fn new(
         config_path: PathBuf,
-        database_description: String,
+        description: String,
         store: Result<Arc<dyn Store>, String>,
     ) -> Self {
         Self {
             config_path,
-            database_description,
-            store,
+            connection: RwLock::new(Connection { description, store }),
             session: Mutex::new(None),
             idle_lock_minutes: AtomicU32::new(AppSettings::DEFAULT_IDLE_LOCK_MINUTES),
         }
+    }
+
+    pub fn connection(&self) -> Connection {
+        self.connection
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    pub fn store(&self) -> Result<Arc<dyn Store>, String> {
+        self.connection().store
+    }
+
+    /// Switches to another database. Whoever was signed in is signed out, since
+    /// accounts belong to a database.
+    pub async fn replace_connection(&self, description: String, store: Arc<dyn Store>) {
+        *self.connection.write().unwrap_or_else(|p| p.into_inner()) = Connection {
+            description,
+            store: Ok(store),
+        };
+        self.with_session(|slot| *slot = None);
+        self.refresh_idle_lock().await;
+    }
+
+    async fn refresh_idle_lock(&self) {
+        let minutes = match self.store() {
+            Ok(store) => store.settings().await.ok().map(|s| s.idle_lock_minutes),
+            Err(_) => None,
+        };
+        self.set_idle_lock_minutes(minutes.unwrap_or(AppSettings::DEFAULT_IDLE_LOCK_MINUTES));
     }
 
     pub fn idle_timeout(&self) -> Duration {

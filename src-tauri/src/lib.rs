@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod connection;
 mod files;
 mod state;
 
@@ -61,6 +62,11 @@ pub fn run() {
             commands::reveal_attachment,
             commands::set_attachment_archived,
             commands::check_attachments_folder,
+            connection::get_connection_settings,
+            connection::read_shared_settings,
+            connection::test_connection,
+            connection::save_connection,
+            connection::copy_database,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PolarisCal");

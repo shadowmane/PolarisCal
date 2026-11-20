@@ -11,6 +11,7 @@ pub mod error;
 pub mod model;
 pub mod schedule;
 pub mod store;
+pub mod transfer;
 
 pub use error::{Error, FieldError, Result};
 pub use store::Store;

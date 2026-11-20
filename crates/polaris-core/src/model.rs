@@ -131,6 +131,10 @@ text_enum!(
         PasswordChange => "password_change",
         /// An administrator set a new password for someone else.
         PasswordReset => "password_reset",
+        /// All data was copied from this database to another one.
+        Export => "export",
+        /// This database was filled with data copied from another one.
+        Import => "import",
     }
 );
 
@@ -144,6 +148,8 @@ text_enum!(
         Session => "session",
         Settings => "settings",
         Attachment => "attachment",
+        /// The database as a whole (data copies).
+        Database => "database",
     }
 );
 

@@ -1,7 +1,13 @@
 //! Behavioral tests for the `Store` contract. They only use the trait, so the
-//! same tests can run against every backend; today that is SQLite.
+//! same tests run against every backend.
+//!
+//! By default each test gets a new SQLite file. To run them against a server, set
+//! `POLARISCAL_TEST_DATABASE` to a `DatabaseConfig` in JSON for an account that may
+//! create databases (see `.github/workflows/ci.yml`); each test then gets its own
+//! new database on that server.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use chrono::{Days, Local, NaiveDate};
 use polaris_core::audit::{Actor, AuditFilter, WriteContext};
@@ -12,19 +18,72 @@ use polaris_store::DatabaseConfig;
 
 struct Harness {
     store: Arc<dyn Store>,
+    config: DatabaseConfig,
     _dir: tempfile::TempDir,
 }
 
-async fn sqlite() -> Harness {
+/// The server account from `POLARISCAL_TEST_DATABASE`, if tests should use a server.
+fn server_admin() -> Option<DatabaseConfig> {
+    let json = std::env::var("POLARISCAL_TEST_DATABASE").ok()?;
+    if json.trim().is_empty() {
+        return None;
+    }
+    Some(
+        serde_json::from_str(&json)
+            .expect("POLARISCAL_TEST_DATABASE must be a DatabaseConfig in JSON"),
+    )
+}
+
+fn expected_backend() -> &'static str {
+    match server_admin() {
+        None | Some(DatabaseConfig::Sqlite { .. }) => "sqlite",
+        Some(DatabaseConfig::Postgres(_)) => "postgres",
+        Some(DatabaseConfig::Mysql(_)) => "mysql",
+        Some(DatabaseConfig::SqlServer(_)) => "mssql",
+    }
+}
+
+fn sqlite_in(dir: &tempfile::TempDir, name: &str) -> DatabaseConfig {
+    DatabaseConfig::Sqlite {
+        path: dir.path().join("nested").join(name).display().to_string(),
+    }
+}
+
+/// Where a new, empty database for one test lives (nothing is created for SQLite).
+async fn empty_database() -> (DatabaseConfig, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("nested").join("polariscal.db");
-    let store = polaris_store::open(&DatabaseConfig::Sqlite {
-        path: path.display().to_string(),
-    })
-    .await
-    .expect("open sqlite store");
+    let config = match server_admin() {
+        None | Some(DatabaseConfig::Sqlite { .. }) => sqlite_in(&dir, "polariscal.db"),
+        Some(admin) => {
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+                % 1_000_000_000;
+            let name = format!(
+                "polaris_t{}_{stamp}_{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            );
+            polaris_store::testing::create_database(&admin, &name)
+                .await
+                .expect("create test database")
+        }
+    };
+    (config, dir)
+}
+
+/// A new database with the first admin set up.
+async fn harness() -> Harness {
+    let (config, dir) = empty_database().await;
+    let store = polaris_store::open(&config).await.expect("open store");
     setup_admin(store.as_ref()).await;
-    Harness { store, _dir: dir }
+    Harness {
+        store,
+        config,
+        _dir: dir,
+    }
 }
 
 const ADMIN_PASSWORD: &str = "correct horse battery";
@@ -147,10 +206,10 @@ fn cal(asset_id: i64, provider_id: i64, date: NaiveDate) -> CalibrationInput {
 
 #[tokio::test]
 async fn fresh_database_is_migrated_and_seeded() {
-    let h = sqlite().await;
+    let h = harness().await;
     let info = h.store.info().await.unwrap();
-    assert_eq!(info.backend, "sqlite");
-    assert_eq!(info.schema_version, 4);
+    assert_eq!(info.backend, expected_backend());
+    assert_eq!(info.schema_version, 5);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -177,10 +236,7 @@ async fn fresh_database_is_migrated_and_seeded() {
 
 #[tokio::test]
 async fn reopening_an_existing_database_keeps_data() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = DatabaseConfig::Sqlite {
-        path: dir.path().join("p.db").display().to_string(),
-    };
+    let (config, _dir) = empty_database().await;
     {
         let store = polaris_store::open(&config).await.unwrap();
         setup_admin(store.as_ref()).await;
@@ -193,7 +249,7 @@ async fn reopening_an_existing_database_keeps_data() {
 
 #[tokio::test]
 async fn lookups_create_update_and_reject_duplicates() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let loc = s
         .create_lookup(&ctx(), LookupKind::Location, lookup(" Lab A "))
@@ -263,7 +319,7 @@ async fn lookups_create_update_and_reject_duplicates() {
 
 #[tokio::test]
 async fn asset_create_joins_lookups_and_derives_next_date() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let mfr = s
         .create_lookup(&ctx(), LookupKind::Manufacturer, lookup("Fluke"))
@@ -293,7 +349,7 @@ async fn asset_create_joins_lookups_and_derives_next_date() {
 
 #[tokio::test]
 async fn hierarchy_rules_are_enforced() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let system = s
         .create_asset(&ctx(), asset_input(s, "RIG-1", AssetKind::System).await)
@@ -349,7 +405,7 @@ async fn hierarchy_rules_are_enforced() {
 
 #[tokio::test]
 async fn optimistic_concurrency_detects_stale_edits() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let a = s
         .create_asset(&ctx(), asset_input(s, "T-1", AssetKind::Instrument).await)
@@ -376,7 +432,7 @@ async fn optimistic_concurrency_detects_stale_edits() {
 
 #[tokio::test]
 async fn calibration_records_drive_asset_dates() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let vendor = provider(s).await;
     let mut input = asset_input(s, "GAUGE-1", AssetKind::Instrument).await;
@@ -451,7 +507,7 @@ async fn calibration_records_drive_asset_dates() {
 
 #[tokio::test]
 async fn calibration_validation() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let vendor = provider(s).await;
     let asset = s
@@ -505,7 +561,7 @@ async fn calibration_validation() {
 
 #[tokio::test]
 async fn search_and_archive_filtering() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let mut a = asset_input(s, "SCOPE-1", AssetKind::Instrument).await;
     a.serial_number = Some("XY_99".into());
@@ -551,7 +607,7 @@ async fn search_and_archive_filtering() {
 
 #[tokio::test]
 async fn entered_last_date_returns_when_all_records_are_archived() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let vendor = provider(s).await;
     let mut input = asset_input(s, "LEGACY-1", AssetKind::Instrument).await;
@@ -591,7 +647,7 @@ async fn entered_last_date_returns_when_all_records_are_archived() {
 
 #[tokio::test]
 async fn first_admin_can_only_be_created_once() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     assert_eq!(s.user_count().await.unwrap(), 1);
     let again = s.create_first_admin(new_user("second", Role::Admin)).await;
@@ -610,7 +666,7 @@ async fn first_admin_can_only_be_created_once() {
 
 #[tokio::test]
 async fn password_rules_apply_to_new_users() {
-    let h = sqlite().await;
+    let h = harness().await;
     let mut weak = new_user("tech", Role::Technician);
     weak.password = "short".into();
     let r = h.store.create_user(&ctx(), weak).await;
@@ -628,7 +684,7 @@ async fn password_rules_apply_to_new_users() {
 
 #[tokio::test]
 async fn the_last_active_admin_is_protected() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let admin = s.get_user(1).await.unwrap();
     let demote = UserUpdate {
@@ -672,7 +728,7 @@ async fn the_last_active_admin_is_protected() {
 
 #[tokio::test]
 async fn password_change_versus_admin_reset() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let tech = s
         .create_user(&ctx(), new_user("tech", Role::Technician))
@@ -725,7 +781,7 @@ async fn password_change_versus_admin_reset() {
 
 #[tokio::test]
 async fn sign_ins_are_audited() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let admin = s.get_user(1).await.unwrap();
     s.record_sign_in("admin", Some(&admin)).await.unwrap();
@@ -760,7 +816,7 @@ fn is_missing_reason<T>(r: polaris_core::Result<T>) -> bool {
 
 #[tokio::test]
 async fn edits_and_archives_require_a_reason() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let vendor = provider(s).await;
     // Creating needs no reason.
@@ -800,7 +856,7 @@ async fn edits_and_archives_require_a_reason() {
 
 #[tokio::test]
 async fn audit_trail_records_who_what_why_and_values() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let vendor = provider(s).await;
     let mut input = asset_input(s, "AUD-1", AssetKind::Instrument).await;
@@ -870,7 +926,7 @@ async fn audit_trail_records_who_what_why_and_values() {
 
 #[tokio::test]
 async fn settings_are_validated_and_audited() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     assert_eq!(s.settings().await.unwrap().idle_lock_minutes, 15);
     let bad = s
@@ -904,28 +960,26 @@ async fn settings_are_validated_and_audited() {
     assert_eq!(entries[0].changes[0].new.as_deref(), Some("30"));
 }
 
-/// SQLite-specific: the audit table rejects edits and deletes at the database level.
+/// The audit table rejects edits and deletes at the database level, not just in the app.
 #[tokio::test]
-async fn sqlite_audit_log_is_append_only() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("p.db");
-    let store = polaris_store::open(&DatabaseConfig::Sqlite {
-        path: path.display().to_string(),
-    })
-    .await
-    .unwrap();
-    setup_admin(store.as_ref()).await;
-    drop(store);
-
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", path.display()))
-        .await
-        .unwrap();
-    let update = sqlx::query("UPDATE audit_log SET username = 'someone else'")
-        .execute(&pool)
-        .await;
-    assert!(update.unwrap_err().to_string().contains("append-only"));
-    let delete = sqlx::query("DELETE FROM audit_log").execute(&pool).await;
-    assert!(delete.unwrap_err().to_string().contains("append-only"));
+async fn audit_log_is_append_only_in_the_database() {
+    let h = harness().await;
+    for sql in [
+        "UPDATE audit_log SET username = 'someone else'",
+        "DELETE FROM audit_log",
+    ] {
+        let err = polaris_store::testing::execute_raw(&h.config, sql)
+            .await
+            .expect_err(sql);
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    assert!(
+        !h.store
+            .list_audit(&AuditFilter::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -948,7 +1002,7 @@ fn file(asset_id: i64, calibration_id: Option<i64>, path: &str) -> NewAttachment
 
 #[tokio::test]
 async fn attachments_link_to_assets_and_calibrations() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let vendor = provider(s).await;
     let a = s
@@ -1030,7 +1084,7 @@ async fn attachments_link_to_assets_and_calibrations() {
 
 #[tokio::test]
 async fn archiving_attachments_needs_a_reason_and_is_audited() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let a = s
         .create_asset(&ctx(), asset_input(s, "ATT-3", AssetKind::Instrument).await)
@@ -1085,7 +1139,7 @@ async fn archiving_attachments_needs_a_reason_and_is_audited() {
 
 #[tokio::test]
 async fn attachments_need_an_active_item() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     let a = s
         .create_asset(&ctx(), asset_input(s, "ATT-4", AssetKind::Instrument).await)
@@ -1109,7 +1163,7 @@ async fn attachments_need_an_active_item() {
 
 #[tokio::test]
 async fn attachments_folder_setting_round_trips() {
-    let h = sqlite().await;
+    let h = harness().await;
     let s = h.store.as_ref();
     assert_eq!(s.settings().await.unwrap().attachments_root, None);
     let saved = s
@@ -1150,4 +1204,221 @@ async fn attachments_folder_setting_round_trips() {
     .await
     .unwrap();
     assert_eq!(s.settings().await.unwrap().attachments_root, None);
+}
+
+// ---------------------------------------------------------------------------
+// Copying a whole database between backends
+// ---------------------------------------------------------------------------
+
+/// Fills a database with a bit of everything: lists, a System with an Instrument,
+/// calibrations, a file, another user, settings, and their audit entries.
+async fn populate(store: &dyn Store) {
+    let provider = provider(store).await;
+    let mut location = lookup("Lab 2");
+    location.description = Some("Second floor".into());
+    let location = store
+        .create_lookup(&ctx(), LookupKind::Location, location)
+        .await
+        .unwrap();
+    let system = store
+        .create_asset(&ctx(), asset_input(store, "SYS-1", AssetKind::System).await)
+        .await
+        .unwrap();
+    let mut child = asset_input(store, "INS-1", AssetKind::Instrument).await;
+    child.parent_id = Some(system.id);
+    child.location_id = Some(location.id);
+    child.serial_number = Some("SN-ÄÖ-1".into());
+    let child = store.create_asset(&ctx(), child).await.unwrap();
+    let record = store
+        .create_calibration(&ctx(), cal(child.id, provider, d(2026, 3, 1)))
+        .await
+        .unwrap();
+    store
+        .create_calibration(&ctx(), cal(child.id, provider, d(2025, 3, 1)))
+        .await
+        .unwrap();
+    store
+        .create_attachment(
+            &ctx(),
+            file(child.id, Some(record.id), "INS-1/2026-03-01/cert.pdf"),
+        )
+        .await
+        .unwrap();
+    store
+        .create_user(&ctx(), new_user("tech", Role::Technician))
+        .await
+        .unwrap();
+    store
+        .update_settings(
+            &ctx(),
+            AppSettings {
+                idle_lock_minutes: 30,
+                attachments_root: Some(r"\\server\share\PolarisCal".into()),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+/// Everything a user can see, for comparing two databases.
+async fn visible_state(
+    store: &dyn Store,
+) -> (
+    Vec<Asset>,
+    Vec<CalibrationRecord>,
+    Vec<Attachment>,
+    Vec<Vec<LookupItem>>,
+    Vec<polaris_core::auth::User>,
+    AppSettings,
+) {
+    let assets = store
+        .list_assets(&AssetFilter {
+            include_archived: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let cals = store
+        .list_calibrations(&CalibrationFilter {
+            include_archived: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let files = store
+        .list_attachments(&AttachmentFilter {
+            include_archived: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut lists = Vec::new();
+    for kind in [
+        LookupKind::Location,
+        LookupKind::Department,
+        LookupKind::Owner,
+        LookupKind::Manufacturer,
+        LookupKind::Provider,
+        LookupKind::Status,
+    ] {
+        lists.push(store.list_lookups(kind, true).await.unwrap());
+    }
+    let users = store.list_users().await.unwrap();
+    let settings = store.settings().await.unwrap();
+    (assets, cals, files, lists, users, settings)
+}
+
+/// Copies `source` into the empty `target_config` and checks the result.
+async fn copy_and_verify(source: &dyn Store, target_config: &DatabaseConfig) -> Arc<dyn Store> {
+    let target = polaris_store::open(target_config).await.unwrap();
+    let source_audit = source.list_audit(&AuditFilter::default()).await.unwrap();
+    let report =
+        polaris_store::copy_database(source, target.as_ref(), &ctx(), "the source", "the target")
+            .await
+            .unwrap();
+
+    for t in &report.tables {
+        assert_eq!(t.source_rows, t.copied_rows, "{}", t.table);
+    }
+    let assets = report.tables.iter().find(|t| t.table == "assets").unwrap();
+    assert_eq!(
+        (assets.label.as_str(), assets.copied_rows),
+        ("Instruments and Systems", 2)
+    );
+    assert_eq!(
+        visible_state(source).await,
+        visible_state(target.as_ref()).await
+    );
+
+    // The audit trail came across intact, plus one entry for the copy on each side.
+    let target_audit = target.list_audit(&AuditFilter::default()).await.unwrap();
+    assert_eq!(target_audit.len(), source_audit.len() + 1);
+    assert_eq!(target_audit[0].action, AuditAction::Import);
+    assert_eq!(target_audit[0].entity, AuditEntity::Database);
+    assert!(
+        target_audit[0]
+            .entity_label
+            .as_deref()
+            .unwrap()
+            .contains("from the source")
+    );
+    assert_eq!(&target_audit[1..], &source_audit[..]);
+    let source_after = source.list_audit(&AuditFilter::default()).await.unwrap();
+    assert_eq!(source_after[0].action, AuditAction::Export);
+
+    // Passwords still work, and new rows get fresh ids after the copied ones.
+    let creds = target.credentials("TECH").await.unwrap().unwrap();
+    assert!(verify_password(ADMIN_PASSWORD, &creds.password_hash));
+    let max_id = visible_state(target.as_ref())
+        .await
+        .0
+        .iter()
+        .map(|a| a.id)
+        .max()
+        .unwrap();
+    let new_asset = target
+        .create_asset(
+            &ctx(),
+            asset_input(target.as_ref(), "NEW-1", AssetKind::Instrument).await,
+        )
+        .await
+        .unwrap();
+    assert!(new_asset.id > max_id);
+    target
+        .create_lookup(&ctx(), LookupKind::Location, lookup("Lab 3"))
+        .await
+        .unwrap();
+    target
+        .create_user(&ctx(), new_user("newer", Role::Viewer))
+        .await
+        .unwrap();
+
+    // A database that already has data is never merged into.
+    let again = polaris_store::copy_database(source, target.as_ref(), &ctx(), "a", "b").await;
+    assert!(matches!(again, Err(Error::Conflict(_))), "{again:?}");
+    target
+}
+
+#[tokio::test]
+async fn copying_a_database_keeps_every_record_and_verifies_counts() {
+    let h = harness().await;
+    populate(h.store.as_ref()).await;
+
+    // This backend to a new SQLite file (server -> SQLite when testing a server).
+    let dir = tempfile::tempdir().unwrap();
+    let file_copy = copy_and_verify(h.store.as_ref(), &sqlite_in(&dir, "copy.db")).await;
+
+    // And back again into a new database of the backend under test (SQLite -> server).
+    let (round_trip, _dir2) = empty_database().await;
+    let fresh = polaris_store::open(&round_trip).await.unwrap();
+    drop(fresh);
+    let source = polaris_store::open(&sqlite_in(&dir, "copy-source.db"))
+        .await
+        .unwrap();
+    setup_admin(source.as_ref()).await;
+    populate(source.as_ref()).await;
+    copy_and_verify(source.as_ref(), &round_trip).await;
+    drop(file_copy);
+}
+
+#[tokio::test]
+async fn copying_into_a_database_in_use_is_refused() {
+    let h = harness().await;
+    populate(h.store.as_ref()).await;
+    let other = harness().await;
+    let err =
+        polaris_store::copy_database(h.store.as_ref(), other.store.as_ref(), &ctx(), "a", "b")
+            .await
+            .unwrap_err();
+    assert!(err.to_string().contains("already contains data"), "{err}");
+    // Nothing was changed in either database.
+    assert_eq!(other.store.user_count().await.unwrap(), 1);
+    assert!(
+        h.store
+            .list_audit(&AuditFilter::default())
+            .await
+            .unwrap()
+            .iter()
+            .all(|e| e.action != AuditAction::Export)
+    );
 }

@@ -57,7 +57,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             message: message.into(),
@@ -85,12 +85,11 @@ impl From<Error> for CommandError {
     }
 }
 
-type CmdResult<T> = Result<T, CommandError>;
+pub(crate) type CmdResult<T> = Result<T, CommandError>;
 
-fn store(state: &AppState) -> CmdResult<Arc<dyn Store>> {
+pub(crate) fn store(state: &AppState) -> CmdResult<Arc<dyn Store>> {
     state
-        .store
-        .clone()
+        .store()
         .map_err(|message| CommandError::new(ErrorKind::NotConnected, message))
 }
 
@@ -99,7 +98,7 @@ fn store(state: &AppState) -> CmdResult<Arc<dyn Store>> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Need {
+pub(crate) enum Need {
     /// Any signed-in user with a usable password.
     SignedIn,
     /// Admin or Technician: create/edit/archive items and calibration records.
@@ -112,7 +111,7 @@ enum Need {
 
 /// Checks the session and role, refreshes the account from the database, and
 /// records activity. Returns the store and the current user.
-async fn require(state: &AppState, need: Need) -> CmdResult<(Arc<dyn Store>, User)> {
+pub(crate) async fn require(state: &AppState, need: Need) -> CmdResult<(Arc<dyn Store>, User)> {
     let store = store(state)?;
     let timeout = state.idle_timeout();
     let user_id = state.with_session(|slot| {
@@ -177,7 +176,7 @@ fn actor(user: &User) -> Actor {
     }
 }
 
-fn ctx(user: &User, reason: Option<String>) -> WriteContext {
+pub(crate) fn ctx(user: &User, reason: Option<String>) -> WriteContext {
     WriteContext::new(actor(user), reason)
 }
 
@@ -219,7 +218,8 @@ pub struct AppInfo {
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
-    let (store_info, connection_error) = match &state.store {
+    let connection = state.connection();
+    let (store_info, connection_error) = match &connection.store {
         Ok(store) => match store.info().await {
             Ok(info) => (Some(info), None),
             Err(e) => (None, Some(e.to_string())),
@@ -229,7 +229,7 @@ pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
     Ok(AppInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         config_path: state.config_path.display().to_string(),
-        database: state.database_description.clone(),
+        database: connection.description.clone(),
         store: store_info,
         connection_error,
     })
@@ -253,8 +253,8 @@ pub async fn auth_status(state: State<'_, AppState>) -> CmdResult<AuthStatus> {
     let idle_lock_minutes = state
         .idle_lock_minutes
         .load(std::sync::atomic::Ordering::Relaxed);
-    let store = match &state.store {
-        Ok(s) => s.clone(),
+    let store = match state.store() {
+        Ok(s) => s,
         Err(message) => {
             return Ok(AuthStatus {
                 connected: false,
@@ -937,7 +937,7 @@ mod tests {
     async fn deactivated_accounts_are_signed_out() {
         let (state, _dir, admin, viewer) = state_with_users().await;
         start_session(&state, &viewer);
-        let store = state.store.clone().unwrap();
+        let store = state.store().unwrap();
         store
             .update_user(
                 &ctx(&admin, None),

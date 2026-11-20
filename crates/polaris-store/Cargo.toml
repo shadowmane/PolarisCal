@@ -6,18 +6,21 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
-[features]
-default = ["sqlite"]
-sqlite = ["sqlx/sqlite"]
-
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
 polaris-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
+sqlx = { workspace = true, features = ["sqlite", "postgres", "mysql", "tls-native-tls"] }
+tiberius = { version = "0.13.0", default-features = false, features = ["tds80", "native-tls", "chrono", "sql-browser-tokio"] }
+tokio = { workspace = true, features = ["net", "time"] }
+tokio-util = { version = "0.7.20", features = ["compat"] }
 ts-rs.workspace = true
+
+# Windows sign-in to SQL Server (SSPI) only exists on Windows.
+[target.'cfg(windows)'.dependencies]
+tiberius = { version = "0.13.0", default-features = false, features = ["winauth"] }
 
 [dev-dependencies]
 tempfile.workspace = true

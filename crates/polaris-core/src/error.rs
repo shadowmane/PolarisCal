@@ -39,7 +39,8 @@ pub enum Error {
     #[error("database error: {0}")]
     Database(String),
 
-    #[error("configuration error: {0}")]
+    /// Settings or connection problems; the message is a complete sentence.
+    #[error("{0}")]
     Config(String),
 }
 

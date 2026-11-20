@@ -20,8 +20,8 @@ frontend renders the UI inside the Windows WebView2.
 │                                       ▲                                  │
 │                                       │ implements                       │
 │                                 polaris-store (crates/polaris-store)     │
-│                                  SQLite today; PostgreSQL, MySQL,        │
-│                                  SQL Server next                         │
+│                                  one SQL store for SQLite, PostgreSQL,   │
+│                                  MySQL/MariaDB, and SQL Server           │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -129,17 +129,37 @@ All of these live in `polaris-core` so every backend applies them identically.
 
 ## Database portability
 
-`sqlx` covers SQLite, PostgreSQL, and MySQL but not SQL Server, so the app talks to storage
-only through the `Store` trait. Each backend:
+One `Store` implementation (`polaris-store/src/store.rs`) serves every backend. Its queries are
+written once in a small portable dialect (`polaris-store/src/sql`): numbered placeholders (`?1`,
+which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, and helpers instead of
+`RETURNING`, `LIMIT`, and upserts. Just before running, each query is rewritten for the server
+(`$1` for PostgreSQL, `?` with the parameters reordered for MySQL, `@P1` and `1`/`0` for SQL Server).
 
-1. lives in its own module behind a cargo feature (`sqlite`, later `postgres`, `mysql`, `mssql`);
-2. has its own migration folder, because the SQL dialects differ;
-3. stores dates as ISO `YYYY-MM-DD`, money as integer cents, and enums as lowercase text;
-4. must pass `tests/store_contract.rs`.
+| Backend | Driver | Schema | Windows login |
+|---|---|---|---|
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 5) | n/a (a file) |
+| PostgreSQL 12+ | sqlx | `migrations/postgres` (starts at 5) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
+| MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (starts at 5) | No. Use a database account. |
+| SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (starts at 5), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
+
+The server schemas match SQLite's version 5, so a schema version means the same thing everywhere
+and future migrations share numbers. All store timestamps in UTC to the microsecond, the finest
+every backend keeps, so copies between backends are exact. The audit table is append-only on every
+backend (triggers reject updates and deletes). Every backend must pass `tests/store_contract.rs`;
+CI runs it against SQLite on Windows and against PostgreSQL 17, MySQL 8.4, MariaDB 11.4, and SQL
+Server 2022 in service containers on Linux.
 
 SQLite runs in WAL mode for local files and falls back to rollback journaling when the file is
-on a network share (UNC path), where WAL is unsafe. A shared SQLite file is not recommended
-for multi-user use; use a database server instead.
+on a network share (UNC path), where WAL is unsafe. A shared SQLite file works for a few users but
+a database server is better for more.
+
+### Preparing a server
+
+Create an empty database (for example `polariscal`) and an account that can create tables, indexes,
+and triggers in it; PolarisCal creates its tables on first connect. On MySQL with binary logging on,
+creating the audit triggers may need `log_bin_trust_function_creators = 1` or extra privileges.
+SQL Server's database collation should be case-insensitive (the default). The connection can be
+encrypted; "Always, with a trusted certificate" requires a certificate this computer trusts.
 
 ## Configuration
 
@@ -155,8 +175,38 @@ SQLite database in the same folder:
 }
 ```
 
-If the database can't be opened, the app still starts and shows the problem on the
-Settings page instead of crashing.
+Administrators change it from **Settings > Database connection** (anyone may when PolarisCal can't
+connect, or when the database has no accounts yet, since they could edit the file anyway). Saving
+connects first (setting PolarisCal up in a new database) and only then writes the file; the user is
+signed out and signs in to the new database.
+
+### Shared settings file
+
+So IT configures the connection once, every computer can follow a **shared settings file** on a
+network share instead:
+
+```json
+{ "shared_settings_file": "\\\\server\\share\\PolarisCal\\polariscal-connection.json", "database": { ... } }
+```
+
+The shared file holds `{ "database": { ... } }` in the same format. An administrator can create or
+change it from the connection dialog. A relative SQLite path in it is relative to the file. A
+password saved in it is readable by anyone who can read the share, so restrict the share, or use SQL
+Server with Windows login so no password is stored at all. A new computer's first-run screen offers
+**Connect to an existing database** to follow the shared file instead of starting a new database.
+
+If the database can't be opened, the app still starts and shows the problem with options to retry
+or change the connection.
+
+## Copying data between databases
+
+**Settings > Copy data to another database** (administrators) copies every table, ids included, into
+a new, empty database of any type: users with their password hashes, items, calibration records,
+file records, lists, settings, and the whole audit trail. It runs in one transaction on the target,
+refuses a target that already holds data, verifies each table's row count, and records the copy in
+both audit trails (`Data copied out` / `Data copied in`). The copy doesn't switch computers over;
+the dialog offers to switch this one, and a shared settings file switches everyone. Attached files
+stay where they are, since the database stores paths relative to the attachments folder.
 
 ## Roadmap
 
@@ -164,5 +214,5 @@ Settings page instead of crashing.
 2. **Core data entry** ✅: forms for Instruments/Systems and Calibration Records, list management, detail views with child items and calibration history.
 3. **Users and audit trail** ✅: logins, roles (Admin / Technician / Viewer), reasons for change, field-level change history, idle auto-lock.
 4. **Certificates** ✅: attach files from the configured share to items and calibration records, with fingerprint checks.
-5. **Remote databases**: PostgreSQL, then MySQL/MariaDB, then SQL Server, plus a connection settings screen.
+5. **Remote databases** ✅: PostgreSQL, MySQL/MariaDB, and SQL Server (with Windows login), a connection settings screen, shared settings files, and copying data between databases.
 6. **Release**: reports and exports, then the installer.

@@ -7,6 +7,7 @@ import { type ReactNode, useState } from "react";
 import type { User } from "../bindings/User";
 import { ApiError, api } from "../lib/api";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
+import { ConnectionDialog } from "./DatabaseForms";
 import { TextInput } from "./fields";
 
 const MIN_PASSWORD = 10;
@@ -100,16 +101,22 @@ export function SplashScreen() {
 }
 
 export function ConnectionErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const [changing, setChanging] = useState(false);
   return (
     <AuthLayout title="Can't open the database" description="PolarisCal couldn't connect to its database.">
       <ErrorBanner message={message} />
       <p className="mb-4 text-sm text-muted">
-        Check that the database file or server is reachable, then try again. The connection is configured in
-        PolarisCal's <code>config.json</code>.
+        Check that the database file or server is reachable, then try again, or choose a different connection.
       </p>
-      <Button fullWidth onPress={onRetry}>
-        Try again
-      </Button>
+      <div className="flex flex-col gap-2">
+        <Button fullWidth onPress={onRetry}>
+          Try again
+        </Button>
+        <Button fullWidth variant="secondary" onPress={() => setChanging(true)}>
+          Change connection…
+        </Button>
+      </div>
+      <ConnectionDialog isOpen={changing} onOpenChange={setChanging} onSaved={onRetry} />
     </AuthLayout>
   );
 }
@@ -121,6 +128,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const { busy, errors, setErrors, message, run, field } = useSubmit();
+  const [changing, setChanging] = useState(false);
 
   function submit() {
     const local = checkNewPassword(password, confirm);
@@ -180,6 +188,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           Create administrator
         </Button>
       </Form>
+      <p className="mt-6 border-t border-separator pt-4 text-sm text-muted">
+        Already using PolarisCal elsewhere in your organization?{" "}
+        <button type="button" className="text-link hover:underline" onClick={() => setChanging(true)}>
+          Connect to an existing database
+        </button>
+      </p>
+      <ConnectionDialog isOpen={changing} onOpenChange={setChanging} onSaved={onDone} />
     </AuthLayout>
   );
 }

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -55,3 +56,72 @@ jobs:
             echo "::error::src/bindings is out of date. Run 'cargo test' and commit the result."
             exit 1
           }
+
+  # The store contract tests against real database servers. Each test creates its
+  # own database through the admin account in POLARISCAL_TEST_DATABASE.
+  servers:
+    name: Database servers
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: polaris-ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: polaris-ci
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ppolaris-ci" --health-interval 5s --health-timeout 5s --health-retries 30
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: polaris-ci
+        ports: ["3307:3306"]
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 5s --health-timeout 5s --health-retries 30
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Polaris-CI-2026!
+        ports: ["1433:1433"]
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Polaris-CI-2026! -Q 'SELECT 1'" --health-interval 10s --health-timeout 10s --health-retries 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the store tests
+        run: cargo test -p polaris-store --no-run
+
+      - name: PostgreSQL 17
+        if: success() || failure()
+        env:
+          POLARISCAL_TEST_DATABASE: '{"backend":"postgres","host":"127.0.0.1","database":"postgres","auth":{"method":"password","username":"postgres","password":"polaris-ci"},"encryption":"off"}'
+        run: cargo test -p polaris-store --test store_contract -- --test-threads=4
+
+      - name: MySQL 8.4
+        if: success() || failure()
+        env:
+          POLARISCAL_TEST_DATABASE: '{"backend":"mysql","host":"127.0.0.1","database":"mysql","auth":{"method":"password","username":"root","password":"polaris-ci"},"encryption":"prefer"}'
+        run: cargo test -p polaris-store --test store_contract -- --test-threads=4
+
+      - name: MariaDB 11.4
+        if: success() || failure()
+        env:
+          POLARISCAL_TEST_DATABASE: '{"backend":"mysql","host":"127.0.0.1","port":3307,"database":"mysql","auth":{"method":"password","username":"root","password":"polaris-ci"},"encryption":"off"}'
+        run: cargo test -p polaris-store --test store_contract -- --test-threads=4
+
+      - name: SQL Server 2022
+        if: success() || failure()
+        env:
+          POLARISCAL_TEST_DATABASE: '{"backend":"sql_server","host":"127.0.0.1","database":"master","auth":{"method":"password","username":"sa","password":"Polaris-CI-2026!"},"encryption":"prefer"}'
+        run: cargo test -p polaris-store --test store_contract -- --test-threads=4

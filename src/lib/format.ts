@@ -89,6 +89,8 @@ export const auditActionMeta: Record<AuditAction, { label: string; color: ChipCo
   sign_out: { label: "Signed out", color: "default" },
   password_change: { label: "Password changed", color: "default" },
   password_reset: { label: "Password reset", color: "warning" },
+  export: { label: "Data copied out", color: "default" },
+  import: { label: "Data copied in", color: "accent" },
 };
 
 export const auditEntityLabel: Record<AuditEntity, string> = {
@@ -99,6 +101,7 @@ export const auditEntityLabel: Record<AuditEntity, string> = {
   session: "Session",
   settings: "Settings",
   attachment: "File",
+  database: "Database",
 };
 
 export const attachmentCategoryMeta: Record<AttachmentCategory, { label: string; color: ChipColor }> = {

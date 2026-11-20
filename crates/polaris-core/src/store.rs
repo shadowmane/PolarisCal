@@ -2,11 +2,13 @@ use async_trait::async_trait;
 
 use crate::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
 use crate::auth::{NewUser, User, UserCredentials, UserUpdate};
+use crate::model::AuditAction;
 use crate::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentFilter, CalibrationFilter,
     CalibrationInput, CalibrationRecord, LookupInput, LookupItem, LookupKind, NewAttachment,
     StoreInfo,
 };
+use crate::transfer::{DataSet, TableCount};
 use crate::{Id, Result};
 
 /// Persistence interface implemented once per database backend.
@@ -160,4 +162,22 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         archived: bool,
     ) -> Result<CalibrationRecord>;
+
+    // --- Moving data between databases -------------------------------------------
+
+    /// Row counts for every table, in [`DataSet`] order.
+    async fn table_counts(&self) -> Result<Vec<TableCount>>;
+    /// Reads every row of every table, ids included, in one consistent read.
+    async fn export_data(&self) -> Result<DataSet>;
+    /// Fills an empty database with `data`, keeping ids, in one transaction.
+    /// Fails with a conflict if the database already holds users or records.
+    /// Writes no audit entry; see [`Store::record_data_copy`].
+    async fn import_data(&self, data: &DataSet) -> Result<()>;
+    /// Audits a data copy (`Export` on the source, `Import` on the target).
+    async fn record_data_copy(
+        &self,
+        ctx: &WriteContext,
+        action: AuditAction,
+        description: &str,
+    ) -> Result<()>;
 }
