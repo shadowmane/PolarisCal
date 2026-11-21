@@ -8,4 +8,9 @@ export type AuthStatus = { connected: boolean, connection_error: string | null,
 /**
  * No accounts exist yet: show the first-run setup screen.
  */
-setup_required: boolean, user: User | null, locked: boolean, idle_lock_minutes: number, };
+setup_required: boolean, user: User | null, locked: boolean, idle_lock_minutes: number, 
+/**
+ * Whether to look for a new version at startup (an admin setting). Known before
+ * sign-in so the update notice can appear on the sign-in screen.
+ */
+update_checks: boolean, };

@@ -3,7 +3,8 @@
 
 import { Alert, Button, Form, Spinner } from "@heroui/react";
 import { Lock, Sparkle } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+import { type ReactNode, useEffect, useState } from "react";
 import type { User } from "../bindings/User";
 import { ApiError, api } from "../lib/api";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
@@ -13,6 +14,10 @@ import { TextInput } from "./fields";
 const MIN_PASSWORD = 10;
 
 function Brand() {
+  const [version, setVersion] = useState<string>();
+  useEffect(() => {
+    getVersion().then(setVersion, () => undefined);
+  }, []);
   return (
     <div className="mb-6 flex flex-col items-center gap-3 text-center">
       <div className="grid size-12 place-items-center rounded-xl bg-accent text-accent-foreground">
@@ -20,7 +25,7 @@ function Brand() {
       </div>
       <div>
         <div className="text-xl font-semibold tracking-tight">PolarisCal</div>
-        <div className="text-xs text-muted">Calibration tracking</div>
+        <div className="text-xs text-muted">{version ? `Version ${version}` : " "}</div>
       </div>
     </div>
   );

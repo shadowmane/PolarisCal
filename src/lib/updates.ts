@@ -6,22 +6,39 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { useSyncExternalStore } from "react";
 
 let available: Update | null = null;
+/** The launch-time notice was closed with "Later" (the sidebar keeps a reminder). */
+let noticeDismissed = false;
 const listeners = new Set<() => void>();
+
+function notify() {
+  for (const l of listeners) l();
+}
 
 function setAvailable(update: Update | null) {
   available = update;
-  for (const l of listeners) l();
+  notify();
+}
+
+function subscribe(l: () => void) {
+  listeners.add(l);
+  return () => {
+    listeners.delete(l);
+  };
 }
 
 /** The update found by the last check, if any. */
 export function useAvailableUpdate(): Update | null {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => available,
-  );
+  return useSyncExternalStore(subscribe, () => available);
+}
+
+/** Whether the update notice was put away with "Later". */
+export function useNoticeDismissed(): boolean {
+  return useSyncExternalStore(subscribe, () => noticeDismissed);
+}
+
+export function setNoticeDismissed(dismissed: boolean) {
+  noticeDismissed = dismissed;
+  notify();
 }
 
 /** Looks for a newer version. Throws if the update server can't be reached. */
@@ -38,7 +55,7 @@ let startupCheckDone = false;
 export function checkOnStartup() {
   if (startupCheckDone) return;
   startupCheckDone = true;
-  window.setTimeout(() => void checkForUpdate().catch(() => undefined), 5000);
+  window.setTimeout(() => void checkForUpdate().catch(() => undefined), 1500);
 }
 
 /** Downloads and installs `update`, reporting progress 0..1 (or null when the size is unknown), then restarts. */

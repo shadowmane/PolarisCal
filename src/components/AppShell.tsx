@@ -18,12 +18,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router";
+import { getVersion } from "@tauri-apps/api/app";
+import { NavLink, Outlet } from "react-router";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { roleMeta } from "../lib/permissions";
 import { setCurrencySymbol } from "../lib/currency";
-import { checkOnStartup, useAvailableUpdate } from "../lib/updates";
+import { setNoticeDismissed, useAvailableUpdate, useNoticeDismissed } from "../lib/updates";
 import { useAsync } from "../lib/useAsync";
 import { ChangePasswordForm } from "./AuthScreens";
 
@@ -173,16 +174,14 @@ export function AppShell() {
   const { can } = useAuth();
   const adminNav = ADMIN_NAV.filter((item) => !item.adminOnly || can("admin"));
   const update = useAvailableUpdate();
-  const navigate = useNavigate();
+  const noticeDismissed = useNoticeDismissed();
+  const version = useAsync(() => getVersion(), []);
 
   // One quiet check for a new version per launch, unless an admin turned checks off.
   useEffect(() => {
     api
       .getSettings()
-      .then((settings) => {
-        setCurrencySymbol(settings.currency_symbol);
-        if (settings.update_checks) checkOnStartup();
-      })
+      .then((settings) => setCurrencySymbol(settings.currency_symbol))
       .catch(() => undefined);
   }, []);
 
@@ -195,27 +194,27 @@ export function AppShell() {
           </div>
           <div className="leading-tight">
             <div className="text-[15px] font-semibold tracking-tight">PolarisCal</div>
-            <div className="text-[11px] text-muted">Calibration tracking</div>
+            <div className="text-[11px] text-muted">{version.data ? `Version ${version.data}` : " "}</div>
           </div>
         </div>
 
         <NavSection items={MAIN_NAV} />
         <NavSection title="Administration" items={adminNav} />
 
-        {update && (
+        {update && noticeDismissed && (
           <button
             type="button"
-            onClick={() => navigate("/settings")}
+            onClick={() => setNoticeDismissed(false)}
             className="mx-1 mt-auto mb-3 flex items-center gap-2 rounded-lg bg-accent-soft px-3 py-2 text-left text-sm text-accent-soft-foreground hover:opacity-90"
           >
             <ArrowDownCircle className="size-4 shrink-0" />
             <span>
               Version {update.version} is available
-              <span className="block text-xs opacity-80">Open Settings to install it</span>
+              <span className="block text-xs opacity-80">Select to update</span>
             </span>
           </button>
         )}
-        <div className={`${update ? "" : "mt-auto "}border-t border-separator pt-3`}>
+        <div className={`${update && noticeDismissed ? "" : "mt-auto "}border-t border-separator pt-3`}>
           <UserPanel />
         </div>
         <div className="flex items-center gap-1">

@@ -13,6 +13,7 @@ import {
   SignInScreen,
   SplashScreen,
 } from "../components/AuthScreens";
+import { UpdateNotice } from "../components/UpdateNotice";
 import { ApiError, AUTH_CHANGED_EVENT, api } from "./api";
 import { can as roleCan, type Permission } from "./permissions";
 
@@ -102,14 +103,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signedIn = !!user && !user.must_change_password;
   useIdleLock(signedIn && !status?.locked, status?.idle_lock_minutes ?? 15, lockNow);
 
-  if (error) return <ConnectionErrorScreen message={error.message} onRetry={refresh} />;
+  // The update notice shows over every screen, including sign-in.
+  const notice = <UpdateNotice enabled={status?.update_checks ?? false} signedIn={signedIn} />;
+  const withNotice = (screen: ReactNode) => (
+    <>
+      {screen}
+      {notice}
+    </>
+  );
+
+  if (error) return withNotice(<ConnectionErrorScreen message={error.message} onRetry={refresh} />);
   if (!status) return <SplashScreen />;
   if (!status.connected) {
-    return <ConnectionErrorScreen message={status.connection_error ?? "Unknown error"} onRetry={refresh} />;
+    return withNotice(<ConnectionErrorScreen message={status.connection_error ?? "Unknown error"} onRetry={refresh} />);
   }
-  if (status.setup_required) return <SetupScreen onDone={refresh} />;
-  if (!user) return <SignInScreen onDone={refresh} />;
-  if (user.must_change_password) return <ChangePasswordScreen user={user} onDone={refresh} onSignOut={signOut} />;
+  if (status.setup_required) return withNotice(<SetupScreen onDone={refresh} />);
+  if (!user) return withNotice(<SignInScreen onDone={refresh} />);
+  if (user.must_change_password)
+    return withNotice(<ChangePasswordScreen user={user} onDone={refresh} onSignOut={signOut} />);
 
   const value: AuthContextValue = {
     user,
@@ -126,6 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         {children}
       </div>
       {status.locked && <LockScreen user={user} onUnlocked={refresh} onSignOut={signOut} />}
+      {notice}
     </AuthContext.Provider>
   );
 }

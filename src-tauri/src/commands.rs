@@ -246,6 +246,9 @@ pub struct AuthStatus {
     pub user: Option<User>,
     pub locked: bool,
     pub idle_lock_minutes: u32,
+    /// Whether to look for a new version at startup (an admin setting). Known before
+    /// sign-in so the update notice can appear on the sign-in screen.
+    pub update_checks: bool,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -263,10 +266,16 @@ pub async fn auth_status(state: State<'_, AppState>) -> CmdResult<AuthStatus> {
                 user: None,
                 locked: false,
                 idle_lock_minutes,
+                update_checks: true,
             });
         }
     };
     let setup_required = store.user_count().await? == 0;
+    let update_checks = store
+        .settings()
+        .await
+        .map(|s| s.update_checks)
+        .unwrap_or(true);
     let timeout = state.idle_timeout();
     let (user, locked) = state.with_session(|slot| match slot {
         Some(session) => {
@@ -284,6 +293,7 @@ pub async fn auth_status(state: State<'_, AppState>) -> CmdResult<AuthStatus> {
         user,
         locked,
         idle_lock_minutes,
+        update_checks,
     })
 }
 
