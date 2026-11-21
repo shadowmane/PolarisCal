@@ -17,4 +17,8 @@ tracks_due: boolean | null,
  * Service types only: whether records of this type are calibrations, which set
  * an item's last calibration and next due dates.
  */
-counts_as_calibration: boolean | null, };
+counts_as_calibration: boolean | null, 
+/**
+ * Service types only: the built-in Calibration Extension type.
+ */
+is_extension: boolean | null, };

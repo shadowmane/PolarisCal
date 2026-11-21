@@ -20,4 +20,8 @@ last_cal_date_entered: string | null,
 /**
  * Derived: last calibration date plus the interval. Never set directly.
  */
-next_cal_date: string | null, due_status: DueStatus, child_count: number, notes: string | null, is_archived: boolean, row_version: number, created_at: string, updated_at: string, };
+next_cal_date: string | null, 
+/**
+ * A calibration extension sets `next_cal_date` (see [`crate::schedule::apply_extension`]).
+ */
+calibration_extended: boolean, due_status: DueStatus, child_count: number, notes: string | null, is_archived: boolean, row_version: number, created_at: string, updated_at: string, };

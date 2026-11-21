@@ -92,6 +92,10 @@ export function LookupDialog({
                 className="flex flex-col gap-4 p-1"
                 onSubmit={(e) => {
                   e.preventDefault();
+                  // This dialog can open from inside another form (the item form's "+" buttons).
+                  // React passes events up through portals, so without this the item form would
+                  // see the submit too and save itself.
+                  e.stopPropagation();
                   void save();
                 }}
               >

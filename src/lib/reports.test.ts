@@ -41,6 +41,7 @@ function asset(id: number, tag: string, over: Partial<Asset> = {}): Asset {
     last_cal_date: null,
     last_cal_date_entered: null,
     next_cal_date: null,
+    calibration_extended: false,
     due_status: "no_schedule",
     child_count: 0,
     notes: null,
@@ -61,6 +62,8 @@ function cal(id: number, assetId: number, date: string, over: Partial<Calibratio
     service_type_id: 1,
     service_type_name: "Calibration",
     counts_as_calibration: true,
+    is_extension: false,
+    extension_days: null,
     calibrated_by: "provider",
     calibrated_by_id: 1,
     calibrated_by_name: "Acme Labs",
@@ -115,6 +118,17 @@ describe("dueReport", () => {
     });
     expect(r.rows.map((row) => row[0])).toEqual(["LATE"]);
     expect(r.subtitle).toBe("Overdue items · as of 2026-11-20 · Lab A");
+  });
+});
+
+describe("dueReport with extensions", () => {
+  it("lists extended items with the overdue ones, even when only overdue is asked for", () => {
+    const assets = [
+      asset(1, "EXT", { next_cal_date: "2026-12-10", due_status: "extended", calibration_extended: true }),
+      asset(2, "LATER", { next_cal_date: "2026-12-11", due_status: "current" }),
+    ];
+    const r = dueReport(assets, { withinDays: 0, locationId: null, departmentId: null, ownerId: null }, "2026-11-20");
+    expect(r.rows.map((row) => row[0])).toEqual(["EXT"]);
   });
 });
 

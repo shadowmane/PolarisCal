@@ -18,7 +18,9 @@ use polaris_core::model::{
     AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationFilter, CalibrationInput,
     CalibrationRecord, LookupInput, LookupItem, LookupKind, NewAttachment, Role, StoreInfo,
 };
-use polaris_core::schedule::{add_interval, derive_dates, due_status};
+use polaris_core::schedule::{
+    add_interval, apply_extension, derive_dates, due_status_with_extension,
+};
 use polaris_core::transfer::{DataSet, TableCount};
 use polaris_core::{Error, Id, Result, Store};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
@@ -320,6 +322,7 @@ macro_rules! asset_select {
                 a.status_id, s.name AS status_name, s.tracks_due AS status_tracks_due,
                 a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit, a.cal_interval_end_of_month,
                 a.in_service_date, a.first_cal_date, a.last_cal_date, a.last_cal_date_entered, a.next_cal_date,
+                a.cal_extended,
                 (SELECT COUNT(*) FROM assets c WHERE c.parent_id = a.id AND c.is_archived = FALSE) AS child_count,
                 a.notes, a.is_archived, a.row_version, a.created_at, a.updated_at
          FROM assets a
@@ -361,7 +364,13 @@ fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
         last_cal_date: row.get("last_cal_date")?,
         last_cal_date_entered: row.get("last_cal_date_entered")?,
         next_cal_date,
-        due_status: due_status(next_cal_date, tracks_due, today),
+        calibration_extended: row.get("cal_extended")?,
+        due_status: due_status_with_extension(
+            next_cal_date,
+            tracks_due,
+            row.get("cal_extended")?,
+            today,
+        ),
         child_count: row.get("child_count")?,
         notes: row.get("notes")?,
         is_archived: row.get("is_archived")?,
@@ -453,13 +462,39 @@ async fn recompute_asset_dates(conn: &mut Conn, asset_id: Id) -> Result<()> {
         interval_from(&row)?,
     );
 
+    // The latest calibration extension, if one was granted since the last calibration.
+    let extension_sql = format!(
+        "SELECT r.cal_date, r.extension_days FROM calibration_records r
+         JOIN service_types t ON t.id = r.service_type_id
+         WHERE r.asset_id = ?1 AND r.is_archived = FALSE AND t.is_extension = TRUE
+           AND r.extension_days IS NOT NULL
+         ORDER BY r.cal_date DESC, r.id DESC
+         {}",
+        conn.dialect().limit("1")
+    );
+    let extension = match conn
+        .fetch_optional(&extension_sql, params![asset_id])
+        .await?
+    {
+        Some(r) => Some((
+            r.get::<NaiveDate>("cal_date")?,
+            u32::try_from(r.get::<i64>("extension_days")?).unwrap_or(0),
+        )),
+        None => None,
+    };
+    let (next_cal_date, extended) =
+        apply_extension(derived.last_cal_date, derived.next_cal_date, extension);
+
     conn.execute(
-        "UPDATE assets SET first_cal_date = ?2, last_cal_date = ?3, next_cal_date = ?4 WHERE id = ?1",
+        "UPDATE assets SET first_cal_date = ?2, last_cal_date = ?3, next_cal_date = ?4,
+                           cal_extended = ?5
+         WHERE id = ?1",
         params![
             asset_id,
             derived.first_cal_date,
             derived.last_cal_date,
-            derived.next_cal_date
+            next_cal_date,
+            extended
         ],
     )
     .await?;
@@ -474,6 +509,7 @@ macro_rules! calibration_select {
     () => {
         "SELECT r.id, r.asset_id, a.asset_tag, r.cal_date, r.provider_id, r.manufacturer_id,
                 r.service_type_id, t.name AS service_type_name, t.counts_as_calibration,
+                t.is_extension, r.extension_days,
                 COALESCE(p.name, m.name) AS calibrated_by_name,
                 r.technician, r.cost_cents, r.certificate_number,
                 r.condition_received, r.condition_returned, r.next_due_date, r.notes,
@@ -489,17 +525,13 @@ macro_rules! calibration_select {
 }
 
 fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
-    // Exactly one of the two is set (a CHECK constraint guarantees it).
+    // At most one of the two is set (a CHECK constraint); extensions have neither.
     let provider: Option<Id> = row.get("provider_id")?;
     let manufacturer: Option<Id> = row.get("manufacturer_id")?;
     let (calibrated_by, calibrated_by_id) = match (provider, manufacturer) {
-        (Some(id), _) => (CalibratedBy::Provider, id),
-        (None, Some(id)) => (CalibratedBy::Manufacturer, id),
-        (None, None) => {
-            return Err(Error::Database(
-                "a calibration record says nobody calibrated it".into(),
-            ));
-        }
+        (Some(id), _) => (Some(CalibratedBy::Provider), Some(id)),
+        (None, Some(id)) => (Some(CalibratedBy::Manufacturer), Some(id)),
+        (None, None) => (None, None),
     };
     Ok(CalibrationRecord {
         id: row.get("id")?,
@@ -509,6 +541,8 @@ fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
         service_type_id: row.get("service_type_id")?,
         service_type_name: row.get("service_type_name")?,
         counts_as_calibration: row.get("counts_as_calibration")?,
+        is_extension: row.get("is_extension")?,
+        extension_days: row.get("extension_days")?,
         calibrated_by,
         calibrated_by_id,
         calibrated_by_name: row.get("calibrated_by_name")?,
@@ -528,18 +562,20 @@ fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
 }
 
 /// The due date a calibration on `cal_date` establishes for this asset.
-/// For a service record: checks the item and service type, and returns the due date
-/// the record establishes (only calibration-type services set one).
-async fn due_date_for(
+/// Checks a service record against its item and service type, clears what doesn't
+/// apply, and returns the due date it sets:
+/// * a calibration-type service: the item's interval from the service date;
+/// * a calibration extension: the service date plus the extension's days (and no
+///   performer, certificate, or cost);
+/// * anything else (a repair): none.
+async fn prepare_service(
     conn: &mut Conn,
-    asset_id: Id,
-    service_type_id: Id,
-    cal_date: NaiveDate,
+    input: &mut CalibrationInput,
 ) -> Result<Option<NaiveDate>> {
-    let counts = conn
+    let service_type = conn
         .fetch_optional(
-            "SELECT counts_as_calibration FROM service_types WHERE id = ?1",
-            params![service_type_id],
+            "SELECT counts_as_calibration, is_extension FROM service_types WHERE id = ?1",
+            params![input.service_type_id],
         )
         .await?
         .ok_or_else(|| {
@@ -547,13 +583,14 @@ async fn due_date_for(
                 "service_type_id",
                 "The selected service type does not exist.",
             )
-        })?
-        .get::<bool>("counts_as_calibration")?;
+        })?;
+    let counts: bool = service_type.get("counts_as_calibration")?;
+    let is_extension: bool = service_type.get("is_extension")?;
     let row = conn
         .fetch_optional(
             "SELECT cal_interval_value, cal_interval_unit, cal_interval_end_of_month, is_archived
              FROM assets WHERE id = ?1",
-            params![asset_id],
+            params![input.asset_id],
         )
         .await?
         .ok_or_else(|| Error::validation("asset_id", "The selected item does not exist."))?;
@@ -563,11 +600,34 @@ async fn due_date_for(
             "The selected item is archived.",
         ));
     }
+
+    if is_extension {
+        let days = input.extension_days.filter(|d| *d >= 1).ok_or_else(|| {
+            Error::validation(
+                "extension_days",
+                "Enter how many days the extension lasts (at least 1).",
+            )
+        })?;
+        input.calibrated_by_id = None;
+        input.certificate_number = None;
+        input.cost_cents = None;
+        return Ok(input
+            .cal_date
+            .checked_add_days(chrono::Days::new(days.unsigned_abs().into())));
+    }
+
+    input.extension_days = None;
+    if input.calibrated_by_id.is_none() {
+        return Err(Error::validation(
+            "calibrated_by_id",
+            "Choose who did the work.",
+        ));
+    }
     if !counts {
         return Ok(None);
     }
     let interval = interval_from(&row)?;
-    Ok(interval.and_then(|i| add_interval(cal_date, i)))
+    Ok(interval.and_then(|i| add_interval(input.cal_date, i)))
 }
 
 // ---------------------------------------------------------------------------
@@ -600,15 +660,15 @@ fn lookup_select(kind: LookupKind) -> String {
     } else {
         "NULL"
     };
-    let counts = if kind == LookupKind::ServiceType {
-        "counts_as_calibration"
+    let (counts, extension) = if kind == LookupKind::ServiceType {
+        ("counts_as_calibration", "is_extension")
     } else {
-        "NULL"
+        ("NULL", "NULL")
     };
     format!(
         "SELECT id, name, description, is_active, sort_order,
                 {internal} AS is_internal, {tracks} AS tracks_due,
-                {counts} AS counts_as_calibration
+                {counts} AS counts_as_calibration, {extension} AS is_extension
          FROM {table}"
     )
 }
@@ -624,6 +684,7 @@ fn map_lookup(row: &Row, kind: LookupKind) -> Result<LookupItem> {
         is_internal: row.get("is_internal")?,
         tracks_due: row.get("tracks_due")?,
         counts_as_calibration: row.get("counts_as_calibration")?,
+        is_extension: row.get("is_extension")?,
     })
 }
 
@@ -658,8 +719,8 @@ fn lookup_usage(kind: LookupKind) -> &'static [Usage] {
 /// The SQL columns for who calibrated: (provider_id, manufacturer_id).
 fn calibrated_by_columns(input: &CalibrationInput) -> (Option<Id>, Option<Id>) {
     match input.calibrated_by {
-        CalibratedBy::Provider => (Some(input.calibrated_by_id), None),
-        CalibratedBy::Manufacturer => (None, Some(input.calibrated_by_id)),
+        CalibratedBy::Provider => (input.calibrated_by_id, None),
+        CalibratedBy::Manufacturer => (None, input.calibrated_by_id),
     }
 }
 
@@ -1350,7 +1411,6 @@ impl Store for SqlStore {
     ) -> Result<LookupItem> {
         input.normalize()?;
         let (table, extra_col) = lookup_table(kind);
-        let extra = lookup_extra(kind, &input);
         let extra_set = extra_col.map(|c| format!(", {c} = ?7")).unwrap_or_default();
         let sql = format!(
             "UPDATE {table}
@@ -1359,6 +1419,11 @@ impl Store for SqlStore {
         );
         let mut tx = self.begin().await?;
         let before = fetch_lookup(&mut tx, kind, id).await?;
+        // The built-in Calibration Extension type never counts as a calibration.
+        if before.is_extension == Some(true) {
+            input.counts_as_calibration = Some(false);
+        }
+        let extra = lookup_extra(kind, &input);
         let mut values = params![
             id,
             &input.name,
@@ -1403,6 +1468,12 @@ impl Store for SqlStore {
         let (table, _) = lookup_table(kind);
         let mut tx = self.begin().await?;
         let item = fetch_lookup(&mut tx, kind, id).await?;
+        if item.is_extension == Some(true) {
+            return Err(Error::Conflict(format!(
+                "'{}' is built in and can't be deleted. Make it inactive if you don't use extensions.",
+                item.name
+            )));
+        }
         let mut uses = Vec::new();
         for (used_table, used_column, noun) in lookup_usage(kind) {
             let n = tx
@@ -1567,7 +1638,6 @@ impl Store for SqlStore {
         mut input: AssetInput,
     ) -> Result<Asset> {
         input.normalize()?;
-        ctx.require_reason()?;
         let mut tx = self.begin().await?;
         check_hierarchy(&mut tx, Some(id), &input).await?;
         let before = fetch_asset(&mut tx, id).await?;
@@ -1638,7 +1708,6 @@ impl Store for SqlStore {
         expected_version: i64,
         archived: bool,
     ) -> Result<Asset> {
-        ctx.require_reason()?;
         let mut tx = self.begin().await?;
         if archived {
             let children = tx
@@ -1838,7 +1907,6 @@ impl Store for SqlStore {
         expected_version: i64,
         archived: bool,
     ) -> Result<Attachment> {
-        ctx.require_reason()?;
         let mut tx = self.begin().await?;
         let before = fetch_attachment(&mut tx, id).await?;
         let changed = tx
@@ -1907,21 +1975,15 @@ impl Store for SqlStore {
     ) -> Result<CalibrationRecord> {
         input.normalize(today())?;
         let mut tx = self.begin().await?;
-        let next_due = due_date_for(
-            &mut tx,
-            input.asset_id,
-            input.service_type_id,
-            input.cal_date,
-        )
-        .await?;
+        let next_due = prepare_service(&mut tx, &mut input).await?;
 
         let id = tx
             .insert(
                 "INSERT INTO calibration_records (
                     asset_id, cal_date, provider_id, technician, cost_cents, certificate_number,
                     condition_received, condition_returned, next_due_date, notes, created_at, updated_at,
-                    manufacturer_id, service_type_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13)",
+                    manufacturer_id, service_type_id, extension_days)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, ?14)",
                 params![
                     input.asset_id,
                     input.cal_date,
@@ -1935,7 +1997,8 @@ impl Store for SqlStore {
                     &input.notes,
                     now(),
                     calibrated_by_columns(&input).1,
-                    input.service_type_id
+                    input.service_type_id,
+                    input.extension_days
                 ],
             )
             .await
@@ -1963,7 +2026,6 @@ impl Store for SqlStore {
         mut input: CalibrationInput,
     ) -> Result<CalibrationRecord> {
         input.normalize(today())?;
-        ctx.require_reason()?;
         let mut tx = self.begin().await?;
         let before = fetch_calibration(&mut tx, id).await?;
         if before.asset_id != input.asset_id {
@@ -1972,13 +2034,7 @@ impl Store for SqlStore {
                 "A calibration record cannot be moved to a different item. Archive it and create a new one.",
             ));
         }
-        let next_due = due_date_for(
-            &mut tx,
-            input.asset_id,
-            input.service_type_id,
-            input.cal_date,
-        )
-        .await?;
+        let next_due = prepare_service(&mut tx, &mut input).await?;
 
         let changed = tx
             .execute(
@@ -1986,7 +2042,7 @@ impl Store for SqlStore {
                     cal_date = ?3, provider_id = ?4, technician = ?5, cost_cents = ?6,
                     certificate_number = ?7, condition_received = ?8, condition_returned = ?9,
                     next_due_date = ?10, notes = ?11, updated_at = ?12, manufacturer_id = ?13,
-                    service_type_id = ?14, row_version = row_version + 1
+                    service_type_id = ?14, extension_days = ?15, row_version = row_version + 1
                  WHERE id = ?1 AND row_version = ?2",
                 params![
                     id,
@@ -2002,7 +2058,8 @@ impl Store for SqlStore {
                     &input.notes,
                     now(),
                     calibrated_by_columns(&input).1,
-                    input.service_type_id
+                    input.service_type_id,
+                    input.extension_days
                 ],
             )
             .await
@@ -2037,7 +2094,6 @@ impl Store for SqlStore {
         expected_version: i64,
         archived: bool,
     ) -> Result<CalibrationRecord> {
-        ctx.require_reason()?;
         let mut tx = self.begin().await?;
         let before = fetch_calibration(&mut tx, id).await?;
         let changed = tx

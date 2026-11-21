@@ -76,6 +76,7 @@ describe("pickable", () => {
     is_internal: null,
     tracks_due: null,
     counts_as_calibration: null,
+    is_extension: null,
   });
 
   it("offers active entries plus the current value even if inactive", () => {
@@ -203,5 +204,31 @@ describe("lookup input", () => {
     expect(emptyLookupInput("provider").is_internal).toBe(false);
     expect(emptyLookupInput("status").tracks_due).toBe(true);
     expect(emptyLookupInput("location").is_internal).toBeNull();
+  });
+
+  it("needs a length for an extension and drops what doesn't apply", () => {
+    const base = emptyCalibrationForm({
+      asset_id: 1,
+      cal_date: "2026-11-20",
+      service_type_id: 3,
+      condition_received: "pass",
+      condition_returned: "pass",
+      calibrated_by_id: 7,
+      cost: 10,
+      certificate_number: "C-1",
+    });
+    const missing = formToCalibrationInput(base, true);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(Object.keys(missing.errors)).toEqual(["extension_days"]);
+
+    const r = formToCalibrationInput({ ...base, extension_days: 30 }, true);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value).toMatchObject({
+      extension_days: 30,
+      calibrated_by_id: null,
+      cost_cents: null,
+      certificate_number: null,
+    });
   });
 });

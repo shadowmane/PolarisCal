@@ -371,6 +371,7 @@ export function AssetFormPage() {
             value={form.warranty_end_date}
             onChange={(v) => set("warranty_end_date", v)}
             error={errors.warranty_end_date}
+            description="Leave empty for one year after the date put into service."
           />
           {editing && original && (
             <div className="flex flex-col justify-center gap-1 text-sm">
@@ -396,11 +397,10 @@ export function AssetFormPage() {
         title={`Save changes to ${original?.asset_tag ?? "this item"}?`}
         confirmLabel="Save changes"
         tone="accent"
-        requireReason
-        reasonLabel="Reason for change"
+        askReason
         onConfirm={(reason) => save(reason)}
       >
-        Changes to an existing item are recorded in its history along with your reason.
+        Changes to an existing item are recorded in its history, with your reason if you give one.
       </ConfirmDialog>
     </Form>
   );

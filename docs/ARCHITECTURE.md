@@ -64,6 +64,7 @@ All of these live in `polaris-core` so every backend applies them identically.
   * *last calibration* is the latest non-archived record's date. While an item has no records
     it is the manually entered value (`last_cal_date_entered`, for items migrated from an older
     system), which is stored separately so it comes back if every record is archived;
+  * The **warranty end date** defaults to one year after the date put into service when left empty.
   * Only **service records whose type counts as a calibration** (Calibration by default; not Repair)
     set the last calibration date and a due date. Changing whether a type counts re-derives the
     affected items' dates.
@@ -102,9 +103,8 @@ All of these live in `polaris-core` so every backend applies them identically.
 * **Auto-lock**: after the admin-configured idle time (default 15 minutes), the app locks and asks for
   the password. The backend enforces the same timeout, and the UI stays mounted underneath, so unsaved
   form input survives the lock.
-* **Reasons**: editing, archiving, or restoring an existing Instrument, System, or Calibration Record
-  requires a reason (enforced by every backend through `WriteContext::require_reason`). Creating one
-  doesn't.
+* **Reasons**: editing, archiving, or restoring an existing Instrument, System, service record, or
+  file asks for a reason. It's recommended, not required, and stored with the audit entry when given.
 * **Audit trail**: every write inserts an `audit_log` row in the same transaction: user, time, action,
   subject, reason, and a field-by-field list of old and new values built by `polaris_core::audit`.
   Sign-ins (including failures), sign-outs, password changes and resets, and settings changes are
@@ -127,7 +127,7 @@ All of these live in `polaris-core` so every backend applies them identically.
   fingerprint: a changed file triggers a warning before it opens, and a missing file is reported with
   where it was expected. The same file can't be attached twice to the same item or record.
 * Files are opened in their default Windows program and can be shown in File Explorer. Removing a file
-  from the list **archives** it (a reason is required); the file itself is never deleted.
+  from the list **archives** it (a reason is recommended); the file itself is never deleted.
 * Technicians and Administrators can attach and archive files; everyone can open them. Every attach
   and archive is written to the audit trail.
 
@@ -141,7 +141,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 8) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 9) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -219,6 +219,16 @@ Calibration records are called **service records** in the app (the table is stil
 "Counts as a calibration" switch decides whether the record moves the item's schedule. Costs are
 shown with the organization's **currency symbol** (Settings; $ by default), in the app, reports, and
 Excel exports. The symbol is display only; amounts are never converted.
+
+### Calibration extensions
+
+The built-in **Calibration Extension** service type (it can be renamed or made inactive, but not
+deleted, and never counts as a calibration) authorizes an item for use past its due date. An
+extension record has no performer, certificate, or cost; it records who authorized it (the
+Technician, filled with the user's name) and a length in days. The item's next calibration becomes
+the extension's date plus those days, and the last calibration stays as it was. An extension never
+shortens the schedule, and the next calibration on or after its date ends it. While it lasts the
+item's status is **Calibration extended**; it is still counted and listed with the overdue items.
 
 ## Reports and labels
 

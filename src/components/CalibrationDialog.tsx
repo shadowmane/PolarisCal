@@ -6,7 +6,9 @@ import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { ConditionReceived } from "../bindings/ConditionReceived";
 import type { ConditionReturned } from "../bindings/ConditionReturned";
 import { ApiError, api } from "../lib/api";
-import { conditionReceivedMeta, conditionReturnedMeta } from "../lib/format";
+import { useAuth } from "../lib/auth";
+import { conditionReceivedMeta, conditionReturnedMeta, formatDate } from "../lib/format";
+import { addDays } from "../lib/reports";
 import {
   type CalibrationForm,
   calibrationToForm,
@@ -20,7 +22,7 @@ import { LookupSelect } from "./LookupSelect";
 import { useAsync } from "../lib/useAsync";
 import { AttachmentsPanel, PendingFiles } from "./Attachments";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { DateInput, MoneyInput, SelectInput, TextAreaInput, TextInput } from "./fields";
+import { DateInput, MoneyInput, NumberInput, SelectInput, TextAreaInput, TextInput } from "./fields";
 
 export interface AssetRef {
   id: number;
@@ -128,6 +130,14 @@ export function CalibrationDialog({
     if (first) setForm((f) => ({ ...f, service_type_id: first.id }));
   }, [isOpen, record, form.service_type_id, lookups.data]);
 
+  const { user } = useAuth();
+  const isExtension =
+    lookups.data?.service_type.find((t) => t.id === form.service_type_id)?.is_extension === true;
+  const extensionEnds =
+    isExtension && form.cal_date && form.extension_days && form.extension_days >= 1
+      ? addDays(form.cal_date, form.extension_days)
+      : null;
+
   function set<K extends keyof CalibrationForm>(key: K, value: CalibrationForm[K]) {
     setForm((f) => ({ ...f, [key]: value }));
     const errorKey = key === "cost" ? "cost_cents" : key;
@@ -143,13 +153,9 @@ export function CalibrationDialog({
 
   async function save() {
     setFormError(undefined);
-    const converted = formToCalibrationInput(form);
-    const missingReason = record && !reason.trim();
-    if (!converted.ok || missingReason) {
-      setErrors({
-        ...(converted.ok ? {} : converted.errors),
-        ...(missingReason ? { reason: "Enter a reason for this change." } : {}),
-      });
+    const converted = formToCalibrationInput(form, isExtension);
+    if (!converted.ok) {
+      setErrors(converted.errors);
       return;
     }
     setSaving(true);
@@ -249,7 +255,13 @@ export function CalibrationDialog({
                     kind="service_type"
                     label="Service type"
                     value={form.service_type_id}
-                    onChange={(v) => set("service_type_id", v)}
+                    onChange={(v) => {
+                      set("service_type_id", v);
+                      // An extension is authorized by whoever records it.
+                      if (lookups.data?.service_type.find((t) => t.id === v)?.is_extension) {
+                        set("technician", user.display_name);
+                      }
+                    }}
                     lookups={lookups}
                     error={errors.service_type_id}
                     isRequired
@@ -261,8 +273,26 @@ export function CalibrationDialog({
                     error={errors.cal_date}
                     isRequired
                   />
+                  {isExtension && (
+                    <NumberInput
+                      label="Length of extension (days)"
+                      value={form.extension_days}
+                      onChange={(v) => set("extension_days", v == null ? null : Math.trunc(v))}
+                      minValue={1}
+                      step={1}
+                      error={errors.extension_days}
+                      isRequired
+                      description={
+                        extensionEnds
+                          ? `Authorized for use until ${formatDate(extensionEnds)}. The next calibration date moves there; the last calibration date stays.`
+                          : "The next calibration date moves to the date of service plus this many days."
+                      }
+                      className="md:col-span-2"
+                    />
+                  )}
                   <SelectInput<CalibratedBy>
                     label="Performed by"
+                    isDisabled={isExtension}
                     value={form.calibrated_by}
                     onChange={(v) => {
                       if (!v || v === form.calibrated_by) return;
@@ -277,7 +307,7 @@ export function CalibrationDialog({
                       },
                       { id: "manufacturer", label: "Manufacturer", description: "The item's maker did the work." },
                     ]}
-                    isRequired
+                    isRequired={!isExtension}
                     allowEmpty={false}
                   />
                   {form.calibrated_by === "manufacturer" ? (
@@ -289,7 +319,8 @@ export function CalibrationDialog({
                       onChange={(v) => set("calibrated_by_id", v)}
                       lookups={lookups}
                       error={errors.calibrated_by_id}
-                      isRequired
+                      isRequired={!isExtension}
+                      isDisabled={isExtension}
                     />
                   ) : (
                     <LookupSelect
@@ -300,7 +331,8 @@ export function CalibrationDialog({
                       onChange={(v) => set("calibrated_by_id", v)}
                       lookups={lookups}
                       error={errors.calibrated_by_id}
-                      isRequired
+                      isRequired={!isExtension}
+                      isDisabled={isExtension}
                     />
                   )}
                   <TextInput
@@ -308,13 +340,17 @@ export function CalibrationDialog({
                     value={form.technician}
                     onChange={(v) => set("technician", v)}
                     error={errors.technician}
-                    description="The person who did the work, if known."
+                    isDisabled={isExtension}
+                    description={
+                      isExtension ? "Whoever records the extension authorizes it." : "The person who did the work, if known."
+                    }
                   />
                   <TextInput
                     label="Certificate number"
                     value={form.certificate_number}
                     onChange={(v) => set("certificate_number", v)}
                     error={errors.certificate_number}
+                    isDisabled={isExtension}
                   />
                   <SelectInput<ConditionReceived>
                     label="Condition received"
@@ -337,6 +373,7 @@ export function CalibrationDialog({
                     value={form.cost}
                     onChange={(v) => set("cost", v)}
                     error={errors.cost_cents}
+                    isDisabled={isExtension}
                   />
                   <div />
                   <TextAreaInput
@@ -379,7 +416,7 @@ export function CalibrationDialog({
                       error={errors.reason}
                       rows={2}
                       className="md:col-span-2"
-                      description="Required when editing an existing record. Recorded in the audit trail."
+                      description="Optional, but recommended. Recorded in the audit trail."
                     />
                   )}
                 </form>
@@ -413,7 +450,7 @@ export function CalibrationDialog({
         title={record?.is_archived ? "Restore this service record?" : "Archive this service record?"}
         confirmLabel={record?.is_archived ? "Restore record" : "Archive record"}
         tone={record?.is_archived ? "accent" : "danger"}
-        requireReason
+        askReason
         onConfirm={archive}
       >
         {record?.is_archived

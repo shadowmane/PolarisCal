@@ -3,4 +3,4 @@
 /**
  * Where an item stands against its calibration schedule.
  */
-export type DueStatus = "not_tracked" | "no_schedule" | "overdue" | "due_soon" | "current";
+export type DueStatus = "not_tracked" | "no_schedule" | "overdue" | "extended" | "due_soon" | "current";

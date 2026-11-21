@@ -197,12 +197,13 @@ export function LabelsPage() {
                     matching.map((l) => (
                       <div key={l.assetId} className="flex items-center gap-3 border-b border-separator px-3 py-1.5 text-sm last:border-b-0">
                         <Checkbox
+                          variant="secondary"
                           isSelected={!excluded.has(l.assetId)}
                           onChange={(on) => toggle(l.assetId, on)}
                           aria-label={`Print a label for ${l.tag}`}
                         >
                           <Checkbox.Content className="cursor-pointer">
-                            <Checkbox.Control>
+                            <Checkbox.Control className="size-5 border-2 border-muted">
                               <Checkbox.Indicator />
                             </Checkbox.Control>
                           </Checkbox.Content>

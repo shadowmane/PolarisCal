@@ -206,18 +206,20 @@ pub fn asset_snapshot(a: &Asset) -> Snapshot {
 }
 
 /// "Acme Labs", or "Fluke (manufacturer)".
-fn calibrated_by(r: &CalibrationRecord) -> String {
-    match r.calibrated_by {
-        CalibratedBy::Provider => r.calibrated_by_name.clone(),
-        CalibratedBy::Manufacturer => format!("{} (manufacturer)", r.calibrated_by_name),
-    }
+fn calibrated_by(r: &CalibrationRecord) -> Option<String> {
+    let name = r.calibrated_by_name.clone()?;
+    Some(match r.calibrated_by? {
+        CalibratedBy::Provider => name,
+        CalibratedBy::Manufacturer => format!("{name} (manufacturer)"),
+    })
 }
 
 pub fn calibration_snapshot(r: &CalibrationRecord) -> Snapshot {
     vec![
         ("Date of service", Some(r.cal_date.to_string())),
         ("Service type", Some(r.service_type_name.clone())),
-        ("Performed by", Some(calibrated_by(r))),
+        ("Performed by", calibrated_by(r)),
+        ("Extension (days)", r.extension_days.map(|d| d.to_string())),
         ("Technician", r.technician.clone()),
         ("Cost", cents(r.cost_cents)),
         ("Certificate number", r.certificate_number.clone()),

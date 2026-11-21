@@ -100,7 +100,7 @@ export function CalibrationsPage() {
                     </Table.Cell>
                     <Table.Cell>{r.service_type_name}</Table.Cell>
                     <Table.Cell>
-                      {r.calibrated_by_name}
+                      {r.calibrated_by_name ?? EMPTY}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
                     </Table.Cell>
                     <Table.Cell>

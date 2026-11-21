@@ -35,6 +35,7 @@ type ChipColor = "default" | "accent" | "success" | "warning" | "danger";
 
 export const dueStatusMeta: Record<DueStatus, { label: string; color: ChipColor }> = {
   overdue: { label: "Overdue", color: "danger" },
+  extended: { label: "Calibration extended", color: "warning" },
   due_soon: { label: "Due soon", color: "warning" },
   current: { label: "Current", color: "success" },
   no_schedule: { label: "No schedule", color: "default" },

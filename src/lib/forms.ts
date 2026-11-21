@@ -196,6 +196,8 @@ export interface CalibrationForm {
   /** A calibration provider, or the manufacturer. */
   calibrated_by: CalibratedBy;
   calibrated_by_id: number | null;
+  /** Calibration extensions only. */
+  extension_days: number | null;
   technician: string;
   /** Dollars as typed; converted to cents on save. */
   cost: number | null;
@@ -212,6 +214,7 @@ export function emptyCalibrationForm(defaults: Partial<CalibrationForm> = {}): C
     service_type_id: null,
     calibrated_by: "provider",
     calibrated_by_id: null,
+    extension_days: null,
     technician: "",
     cost: null,
     certificate_number: "",
@@ -227,8 +230,9 @@ export function calibrationToForm(r: CalibrationRecord): CalibrationForm {
     asset_id: r.asset_id,
     cal_date: r.cal_date,
     service_type_id: r.service_type_id,
-    calibrated_by: r.calibrated_by,
+    calibrated_by: r.calibrated_by ?? "provider",
     calibrated_by_id: r.calibrated_by_id,
+    extension_days: r.extension_days,
     technician: r.technician ?? "",
     cost: centsToDollars(r.cost_cents),
     certificate_number: r.certificate_number ?? "",
@@ -238,12 +242,17 @@ export function calibrationToForm(r: CalibrationRecord): CalibrationForm {
   };
 }
 
-export function formToCalibrationInput(f: CalibrationForm): Converted<CalibrationInput> {
+/** `isExtension`: the chosen service type is a calibration extension (no performer,
+ * certificate, or cost; a length in days instead). */
+export function formToCalibrationInput(f: CalibrationForm, isExtension = false): Converted<CalibrationInput> {
   const errors: FieldErrors = {};
   if (f.asset_id == null) errors.asset_id = "Choose the item that was calibrated.";
   if (!f.cal_date) errors.cal_date = "Service date is required.";
   if (f.service_type_id == null) errors.service_type_id = "Choose the type of service.";
-  if (f.calibrated_by_id == null)
+  if (isExtension) {
+    if (f.extension_days == null || !Number.isInteger(f.extension_days) || f.extension_days < 1)
+      errors.extension_days = "Enter how many days the extension lasts (at least 1).";
+  } else if (f.calibrated_by_id == null)
     errors.calibrated_by_id =
       f.calibrated_by === "manufacturer" ? "Choose the manufacturer." : "Choose the calibration provider.";
   if (!f.condition_received) errors.condition_received = "Condition received is required.";
@@ -259,10 +268,11 @@ export function formToCalibrationInput(f: CalibrationForm): Converted<Calibratio
       cal_date: f.cal_date!,
       service_type_id: f.service_type_id!,
       calibrated_by: f.calibrated_by,
-      calibrated_by_id: f.calibrated_by_id!,
+      calibrated_by_id: isExtension ? null : f.calibrated_by_id,
+      extension_days: isExtension ? f.extension_days : null,
       technician: optionalText(f.technician),
-      cost_cents: cents,
-      certificate_number: optionalText(f.certificate_number),
+      cost_cents: isExtension ? null : cents,
+      certificate_number: isExtension ? null : optionalText(f.certificate_number),
       condition_received: f.condition_received!,
       condition_returned: f.condition_returned!,
       notes: optionalText(f.notes),

@@ -77,7 +77,7 @@ function ChildrenCard({ system }: { system: Asset }) {
                     <Table.Cell>
                       <div className="flex items-center gap-2">
                         {formatDate(a.next_cal_date)}
-                        {(a.due_status === "overdue" || a.due_status === "due_soon") && (
+                        {(a.due_status === "overdue" || a.due_status === "extended" || a.due_status === "due_soon") && (
                           <StatusChip color={dueStatusMeta[a.due_status].color}>
                             {dueStatusMeta[a.due_status].label}
                           </StatusChip>
@@ -179,7 +179,7 @@ function HistoryCard({
                     </Table.Cell>
                     <Table.Cell>{r.service_type_name}</Table.Cell>
                     <Table.Cell>
-                      {r.calibrated_by_name}
+                      {r.calibrated_by_name ?? EMPTY}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
                     </Table.Cell>
                     <Table.Cell>
@@ -437,7 +437,7 @@ export function AssetDetailPage() {
         title={asset.is_archived ? `Restore ${asset.asset_tag}?` : `Archive ${asset.asset_tag}?`}
         confirmLabel={asset.is_archived ? "Restore" : "Archive"}
         tone={asset.is_archived ? "accent" : "danger"}
-        requireReason
+        askReason
         onConfirm={toggleArchived}
       >
         {asset.is_archived

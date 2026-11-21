@@ -20,8 +20,8 @@ use crate::{Id, Result};
 ///   Instrument, the last active admin can't be removed, ...).
 /// * Every write runs in one transaction **together with its audit entry**, built with
 ///   the snapshot functions in [`crate::audit`]. The audit table is append-only.
-/// * Editing or archiving/restoring an existing asset or calibration record requires a
-///   reason ([`WriteContext::require_reason`]); creating one does not.
+/// * A reason for editing or archiving/restoring an asset, service record, or file is
+///   recommended and stored in the audit entry when given, but never required.
 /// * After any change to an asset's calibration records or interval, the asset's
 ///   first/last/next dates are recomputed with [`crate::schedule::derive_dates`].
 /// * `expected_version` is checked against `row_version`; a mismatch returns

@@ -67,6 +67,42 @@ pub fn derive_dates(
     }
 }
 
+/// Applies a calibration extension to derived dates. `extension` is the latest active
+/// extension record, `(date, days)`. It counts only if it's after the last calibration
+/// (a calibration on or after its date ends it); the next calibration then becomes
+/// `date + days` and the last calibration is unchanged. An extension never shortens
+/// the schedule: one ending on or before the regular due date has no effect.
+/// Returns `(next, extended)`.
+pub fn apply_extension(
+    last_cal_date: Option<NaiveDate>,
+    next_cal_date: Option<NaiveDate>,
+    extension: Option<(NaiveDate, u32)>,
+) -> (Option<NaiveDate>, bool) {
+    match extension {
+        Some((date, days)) if last_cal_date.is_none_or(|last| date > last) => {
+            match date.checked_add_days(Days::new(days.into())) {
+                Some(end) if next_cal_date.is_none_or(|next| end > next) => (Some(end), true),
+                _ => (next_cal_date, false),
+            }
+        }
+        _ => (next_cal_date, false),
+    }
+}
+
+/// [`due_status`], except that an item in a calibration extension that hasn't run out
+/// is [`DueStatus::Extended`].
+pub fn due_status_with_extension(
+    next: Option<NaiveDate>,
+    status_tracks_due: bool,
+    extended: bool,
+    today: NaiveDate,
+) -> DueStatus {
+    match next {
+        Some(d) if status_tracks_due && extended && d >= today => DueStatus::Extended,
+        _ => due_status(next, status_tracks_due, today),
+    }
+}
+
 pub fn due_status(next: Option<NaiveDate>, status_tracks_due: bool, today: NaiveDate) -> DueStatus {
     if !status_tracks_due {
         return DueStatus::NotTracked;
@@ -109,7 +145,8 @@ impl DueSummary {
             match a.due_status {
                 DueStatus::NotTracked => s.not_tracked += 1,
                 DueStatus::NoSchedule => s.no_schedule += 1,
-                DueStatus::Overdue => s.overdue += 1,
+                // Extended items are past due, just authorized for use: count them as overdue.
+                DueStatus::Overdue | DueStatus::Extended => s.overdue += 1,
                 DueStatus::DueSoon => s.due_30 += 1,
                 DueStatus::Current => {
                     let days = a.next_cal_date.map_or(i64::MAX, |d| (d - today).num_days());
@@ -121,7 +158,10 @@ impl DueSummary {
                     }
                 }
             }
-            if matches!(a.due_status, DueStatus::Overdue | DueStatus::DueSoon) {
+            if matches!(
+                a.due_status,
+                DueStatus::Overdue | DueStatus::Extended | DueStatus::DueSoon
+            ) {
                 s.attention.push(a.clone());
             }
         }
@@ -276,6 +316,51 @@ mod tests {
         assert_eq!(
             add_interval(d(2026, 11, 20), eom(30, IntervalUnit::Days)),
             Some(d(2026, 12, 31))
+        );
+    }
+
+    #[test]
+    fn extensions_move_the_next_date_until_the_next_calibration() {
+        let last = Some(d(2025, 11, 1));
+        let next = Some(d(2026, 11, 1));
+        // Granted after the last calibration: next = date + days.
+        assert_eq!(
+            apply_extension(last, next, Some((d(2026, 11, 10), 30))),
+            (Some(d(2026, 12, 10)), true)
+        );
+        // Older than the last calibration: a calibration since then ended it.
+        assert_eq!(
+            apply_extension(last, next, Some((d(2025, 10, 1), 30))),
+            (next, false)
+        );
+        assert_eq!(apply_extension(last, next, None), (next, false));
+        // Ending before the regular due date: no effect.
+        assert_eq!(
+            apply_extension(last, next, Some((d(2026, 6, 1), 30))),
+            (next, false)
+        );
+        // A calibration the same day as the extension ends it.
+        assert_eq!(
+            apply_extension(Some(d(2026, 11, 10)), next, Some((d(2026, 11, 10), 30))),
+            (next, false)
+        );
+        // No calibration yet: the extension applies.
+        assert_eq!(
+            apply_extension(None, None, Some((d(2026, 1, 1), 1))),
+            (Some(d(2026, 1, 2)), true)
+        );
+    }
+
+    #[test]
+    fn extended_items_are_extended_until_the_extension_runs_out() {
+        let today = d(2026, 11, 20);
+        let ext = |next| due_status_with_extension(Some(next), true, true, today);
+        assert_eq!(ext(d(2026, 12, 1)), DueStatus::Extended);
+        assert_eq!(ext(today), DueStatus::Extended);
+        assert_eq!(ext(d(2026, 11, 19)), DueStatus::Overdue);
+        assert_eq!(
+            due_status_with_extension(Some(d(2026, 12, 1)), false, true, today),
+            DueStatus::NotTracked
         );
     }
 }

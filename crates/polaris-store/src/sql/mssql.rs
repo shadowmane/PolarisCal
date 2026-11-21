@@ -292,6 +292,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "service types",
         include_str!("../../migrations/mssql/0008_service_types.sql"),
     ),
+    (
+        9,
+        "calibration extensions",
+        include_str!("../../migrations/mssql/0009_calibration_extensions.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

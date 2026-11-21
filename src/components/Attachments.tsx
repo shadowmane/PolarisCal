@@ -218,7 +218,7 @@ export function AttachmentsPanel({
         title={archiving?.is_archived ? `Restore ${archiving?.file_name}?` : `Archive ${archiving?.file_name}?`}
         confirmLabel={archiving?.is_archived ? "Restore" : "Archive"}
         tone={archiving?.is_archived ? "accent" : "danger"}
-        requireReason
+        askReason
         onConfirm={async (reason) => {
           if (!archiving) return;
           await api.setAttachmentArchived(archiving.id, archiving.row_version, !archiving.is_archived, reason);

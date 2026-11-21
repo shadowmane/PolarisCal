@@ -132,7 +132,7 @@ export function AssetsPage() {
                     <Table.Cell>
                       <div className="flex items-center gap-2">
                         <span>{formatDate(a.next_cal_date)}</span>
-                        {(a.due_status === "overdue" || a.due_status === "due_soon") && (
+                        {(a.due_status === "overdue" || a.due_status === "extended" || a.due_status === "due_soon") && (
                           <StatusChip color={dueStatusMeta[a.due_status].color}>
                             {dueStatusMeta[a.due_status].label}
                           </StatusChip>

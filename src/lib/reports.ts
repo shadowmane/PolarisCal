@@ -92,8 +92,12 @@ export function dueReport(assets: Asset[], options: DueOptions, today: string, n
       (a) =>
         !a.is_archived &&
         a.next_cal_date != null &&
-        (a.due_status === "overdue" || a.due_status === "due_soon" || a.due_status === "current") &&
-        (options.withinDays === 0 ? a.next_cal_date < today : a.next_cal_date <= limit) &&
+        // Extended items are past due (just authorized for use), so they count as overdue.
+        (a.due_status === "overdue" ||
+          a.due_status === "extended" ||
+          (options.withinDays > 0 &&
+            (a.due_status === "due_soon" || a.due_status === "current") &&
+            a.next_cal_date <= limit)) &&
         (options.locationId == null || a.location_id === options.locationId) &&
         (options.departmentId == null || a.department_id === options.departmentId) &&
         (options.ownerId == null || a.owner_id === options.ownerId),

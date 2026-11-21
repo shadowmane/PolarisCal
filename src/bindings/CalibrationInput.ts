@@ -11,4 +11,12 @@ service_type_id: number,
 /**
  * Whether `calibrated_by_id` is a calibration provider or a manufacturer.
  */
-calibrated_by: CalibratedBy, calibrated_by_id: number, technician: string | null, cost_cents: number | null, certificate_number: string | null, condition_received: ConditionReceived, condition_returned: ConditionReturned, notes: string | null, };
+calibrated_by: CalibratedBy, 
+/**
+ * Required, except for calibration extensions (which have no performer).
+ */
+calibrated_by_id: number | null, 
+/**
+ * Calibration extensions only: how many days the extension lasts (at least 1).
+ */
+extension_days: number | null, technician: string | null, cost_cents: number | null, certificate_number: string | null, condition_received: ConditionReceived, condition_returned: ConditionReturned, notes: string | null, };

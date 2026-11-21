@@ -76,6 +76,9 @@ text_enum!(
         /// Tracked, but there is no next calibration date to measure against.
         NoSchedule => "no_schedule",
         Overdue => "overdue",
+        /// Past its calibration due date but authorized to stay in use until a
+        /// calibration extension ends. Counted with the overdue items.
+        Extended => "extended",
         DueSoon => "due_soon",
         Current => "current",
     }
@@ -222,6 +225,8 @@ pub struct Asset {
     pub last_cal_date_entered: Option<NaiveDate>,
     /// Derived: last calibration date plus the interval. Never set directly.
     pub next_cal_date: Option<NaiveDate>,
+    /// A calibration extension sets `next_cal_date` (see [`crate::schedule::apply_extension`]).
+    pub calibration_extended: bool,
     pub due_status: DueStatus,
     pub child_count: i64,
     pub notes: Option<String>,
@@ -272,6 +277,13 @@ impl AssetInput {
             &mut self.notes,
         ] {
             clean(field);
+        }
+
+        // No warranty date given: assume the standard one year from going into service.
+        if self.warranty_end_date.is_none() {
+            self.warranty_end_date = self
+                .in_service_date
+                .and_then(|d| d.checked_add_months(chrono::Months::new(12)));
         }
 
         if self.asset_tag.is_empty() {
@@ -337,12 +349,16 @@ pub struct CalibrationRecord {
     pub service_type_name: String,
     /// Whether this record's service type counts as a calibration (and so sets due dates).
     pub counts_as_calibration: bool,
-    /// Whether a calibration provider or a manufacturer did the work.
-    pub calibrated_by: CalibratedBy,
+    /// A calibration extension: authorizes use for `extension_days` past the due date.
+    pub is_extension: bool,
+    /// Extensions only: how many days from `cal_date` the extension lasts.
+    pub extension_days: Option<i32>,
+    /// Whether a calibration provider or a manufacturer did the work (none for extensions).
+    pub calibrated_by: Option<CalibratedBy>,
     /// The calibration provider's or manufacturer's id, per `calibrated_by`.
-    pub calibrated_by_id: Id,
+    pub calibrated_by_id: Option<Id>,
     /// The calibration provider's or manufacturer's name.
-    pub calibrated_by_name: String,
+    pub calibrated_by_name: Option<String>,
     /// The individual who performed the work, if recorded.
     pub technician: Option<String>,
     /// Cost in cents to avoid floating-point rounding.
@@ -370,7 +386,11 @@ pub struct CalibrationInput {
     pub service_type_id: Id,
     /// Whether `calibrated_by_id` is a calibration provider or a manufacturer.
     pub calibrated_by: CalibratedBy,
-    pub calibrated_by_id: Id,
+    /// Required, except for calibration extensions (which have no performer).
+    pub calibrated_by_id: Option<Id>,
+    /// Calibration extensions only: how many days the extension lasts (at least 1).
+    #[serde(default)]
+    pub extension_days: Option<i32>,
     pub technician: Option<String>,
     pub cost_cents: Option<i64>,
     pub certificate_number: Option<String>,
@@ -437,6 +457,8 @@ pub struct LookupItem {
     /// Service types only: whether records of this type are calibrations, which set
     /// an item's last calibration and next due dates.
     pub counts_as_calibration: Option<bool>,
+    /// Service types only: the built-in Calibration Extension type.
+    pub is_extension: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -752,5 +774,26 @@ mod tests {
             );
         }
         assert!("bogus".parse::<AssetKind>().is_err());
+    }
+
+    #[test]
+    fn warranty_defaults_to_a_year_after_going_into_service() {
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        let mut i = input();
+        i.in_service_date = Some(d(2026, 2, 28));
+        i.normalize().unwrap();
+        assert_eq!(i.warranty_end_date, Some(d(2027, 2, 28)));
+
+        // A date that's entered is kept.
+        let mut i = input();
+        i.in_service_date = Some(d(2026, 2, 28));
+        i.warranty_end_date = Some(d(2029, 1, 1));
+        i.normalize().unwrap();
+        assert_eq!(i.warranty_end_date, Some(d(2029, 1, 1)));
+
+        // Nothing to go on: no warranty date.
+        let mut i = input();
+        i.normalize().unwrap();
+        assert_eq!(i.warranty_end_date, None);
     }
 }

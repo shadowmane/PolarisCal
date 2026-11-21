@@ -13,11 +13,8 @@ function StatCard({
   value,
   icon,
   tone,
-  hint,
 }: {
   label: string;
-  /** A small line under the number, e.g. the exact range. */
-  hint?: string;
   value: number;
   icon: ReactNode;
   tone: "danger" | "warning" | "accent" | "success" | "default";
@@ -35,10 +32,7 @@ function StatCard({
         <span className="text-sm text-muted">{label}</span>
         <span className={`grid size-8 place-items-center rounded-lg ${toneClass}`}>{icon}</span>
       </div>
-      <div>
-        <div className="text-3xl font-semibold tracking-tight">{value}</div>
-        {hint && <div className="text-xs text-muted">{hint}</div>}
-      </div>
+      <div className="text-3xl font-semibold tracking-tight">{value}</div>
     </Card>
   );
 }
@@ -104,8 +98,7 @@ export function DashboardPage() {
             <StatCard label="Overdue" value={data.overdue} tone="danger" icon={<CircleAlert className="size-4" />} />
             <StatCard label="Due in 30 days" value={data.due_30} tone="warning" icon={<Clock className="size-4" />} />
             <StatCard
-              label="Due within 90 days"
-              hint="In 31 to 90 days"
+              label="Due in 31–90 days"
               value={data.due_31_90}
               tone="accent"
               icon={<CalendarClock className="size-4" />}

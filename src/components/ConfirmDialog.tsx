@@ -4,7 +4,7 @@ import { ApiError } from "../lib/api";
 import { TextAreaInput } from "./fields";
 
 /**
- * A modal yes/no question. With `requireReason`, the user must also say why; the
+ * A modal yes/no question. With `askReason`, the user may also say why (recommended); the
  * reason is passed to `onConfirm` and stored in the audit trail. `onConfirm` may be
  * async; the dialog waits for it and shows its error if it fails.
  */
@@ -15,8 +15,8 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   tone = "danger",
-  requireReason = false,
-  reasonLabel = "Reason",
+  askReason = false,
+  reasonLabel = "Reason for change",
   onConfirm,
 }: {
   isOpen: boolean;
@@ -25,7 +25,7 @@ export function ConfirmDialog({
   children: ReactNode;
   confirmLabel: string;
   tone?: "danger" | "accent";
-  requireReason?: boolean;
+  askReason?: boolean;
   reasonLabel?: string;
   onConfirm: (reason: string) => Promise<unknown> | void;
 }) {
@@ -41,10 +41,6 @@ export function ConfirmDialog({
   }, [isOpen]);
 
   async function confirm() {
-    if (requireReason && !reason.trim()) {
-      setError("Enter a reason for this change.");
-      return;
-    }
     setBusy(true);
     try {
       await onConfirm(reason.trim());
@@ -59,7 +55,7 @@ export function ConfirmDialog({
   return (
     <AlertDialog>
       <AlertDialog.Backdrop isOpen={isOpen} onOpenChange={onOpenChange}>
-        <AlertDialog.Container size={requireReason ? "md" : "sm"}>
+        <AlertDialog.Container size={askReason ? "md" : "sm"}>
           <AlertDialog.Dialog>
             <AlertDialog.Header>
               <AlertDialog.Icon status={tone === "danger" ? "danger" : "accent"} />
@@ -68,7 +64,7 @@ export function ConfirmDialog({
             <AlertDialog.Body>
               <div className="flex flex-col gap-4">
                 <div className="text-sm text-muted">{children}</div>
-                {requireReason && (
+                {askReason && (
                   <TextAreaInput
                     label={reasonLabel}
                     value={reason}
@@ -78,10 +74,10 @@ export function ConfirmDialog({
                     }}
                     error={error}
                     rows={2}
-                    description="Recorded in the audit trail."
+                    description="Optional, but recommended. Recorded in the audit trail."
                   />
                 )}
-                {!requireReason && error && <p className="text-sm text-danger">{error}</p>}
+                {!askReason && error && <p className="text-sm text-danger">{error}</p>}
               </div>
             </AlertDialog.Body>
             <AlertDialog.Footer>

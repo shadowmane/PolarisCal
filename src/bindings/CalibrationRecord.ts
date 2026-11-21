@@ -13,17 +13,25 @@ service_type_id: number, service_type_name: string,
  */
 counts_as_calibration: boolean, 
 /**
- * Whether a calibration provider or a manufacturer did the work.
+ * A calibration extension: authorizes use for `extension_days` past the due date.
  */
-calibrated_by: CalibratedBy, 
+is_extension: boolean, 
+/**
+ * Extensions only: how many days from `cal_date` the extension lasts.
+ */
+extension_days: number | null, 
+/**
+ * Whether a calibration provider or a manufacturer did the work (none for extensions).
+ */
+calibrated_by: CalibratedBy | null, 
 /**
  * The calibration provider's or manufacturer's id, per `calibrated_by`.
  */
-calibrated_by_id: number, 
+calibrated_by_id: number | null, 
 /**
  * The calibration provider's or manufacturer's name.
  */
-calibrated_by_name: string, 
+calibrated_by_name: string | null, 
 /**
  * The individual who performed the work, if recorded.
  */

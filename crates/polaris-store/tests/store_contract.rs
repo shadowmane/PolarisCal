@@ -201,7 +201,8 @@ fn cal(asset_id: i64, provider_id: i64, date: NaiveDate) -> CalibrationInput {
         // The seeded "Calibration" service type is always id 1 in a new database.
         service_type_id: CALIBRATION,
         calibrated_by: CalibratedBy::Provider,
-        calibrated_by_id: provider_id,
+        calibrated_by_id: Some(provider_id),
+        extension_days: None,
         technician: Some("  J. Smith ".into()),
         cost_cents: Some(12_500),
         certificate_number: Some("CERT-001".into()),
@@ -216,7 +217,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 8);
+    assert_eq!(info.schema_version, 9);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -560,8 +561,11 @@ async fn calibration_records_drive_asset_dates() {
         .unwrap();
     assert_eq!(first.technician.as_deref(), Some("J. Smith"));
     assert_eq!(first.next_due_date, Some(d(2026, 6, 10)));
-    assert_eq!(first.calibrated_by, CalibratedBy::Provider);
-    assert_eq!(first.calibrated_by_name, "Acme Calibration Labs");
+    assert_eq!(first.calibrated_by, Some(CalibratedBy::Provider));
+    assert_eq!(
+        first.calibrated_by_name.as_deref(),
+        Some("Acme Calibration Labs")
+    );
 
     let latest = s
         .create_calibration(&ctx(), cal(asset.id, vendor, d(2026, 6, 1)))
@@ -693,9 +697,9 @@ async fn a_manufacturer_can_be_who_calibrated() {
     let mut input = cal(asset.id, maker.id, d(2026, 2, 1));
     input.calibrated_by = CalibratedBy::Manufacturer;
     let record = s.create_calibration(&ctx(), input.clone()).await.unwrap();
-    assert_eq!(record.calibrated_by, CalibratedBy::Manufacturer);
-    assert_eq!(record.calibrated_by_id, maker.id);
-    assert_eq!(record.calibrated_by_name, "Keysight");
+    assert_eq!(record.calibrated_by, Some(CalibratedBy::Manufacturer));
+    assert_eq!(record.calibrated_by_id, Some(maker.id));
+    assert_eq!(record.calibrated_by_name.as_deref(), Some("Keysight"));
     let created = &s.list_audit(&AuditFilter::default()).await.unwrap()[0];
     assert!(
         created
@@ -718,13 +722,16 @@ async fn a_manufacturer_can_be_who_calibrated() {
     // Switching to a calibration provider clears the manufacturer.
     let vendor = provider(s).await;
     input.calibrated_by = CalibratedBy::Provider;
-    input.calibrated_by_id = vendor;
+    input.calibrated_by_id = Some(vendor);
     let edited = s
         .update_calibration(&ctx(), record.id, record.row_version, input.clone())
         .await
         .unwrap();
-    assert_eq!(edited.calibrated_by, CalibratedBy::Provider);
-    assert_eq!(edited.calibrated_by_name, "Acme Calibration Labs");
+    assert_eq!(edited.calibrated_by, Some(CalibratedBy::Provider));
+    assert_eq!(
+        edited.calibrated_by_name.as_deref(),
+        Some("Acme Calibration Labs")
+    );
     // Nothing names the manufacturer any more, so now it can be deleted.
     s.delete_lookup(&ctx(), LookupKind::Manufacturer, maker.id)
         .await
@@ -732,7 +739,7 @@ async fn a_manufacturer_can_be_who_calibrated() {
 
     // An id that doesn't exist is reported, not stored.
     input.calibrated_by = CalibratedBy::Manufacturer;
-    input.calibrated_by_id = 9_999;
+    input.calibrated_by_id = Some(9_999);
     let err = s
         .update_calibration(&ctx(), edited.id, edited.row_version, input)
         .await
@@ -753,10 +760,11 @@ async fn service_types_are_seeded_and_only_calibrations_set_due_dates() {
         summary,
         [
             (CALIBRATION, "Calibration", Some(true)),
+            (3, "Calibration Extension", Some(false)),
             (2, "Repair", Some(false))
         ]
     );
-    let repair = types[1].id;
+    let repair = types.iter().find(|t| t.name == "Repair").unwrap().id;
 
     let vendor = provider(s).await;
     let asset = s
@@ -810,6 +818,102 @@ async fn service_types_are_seeded_and_only_calibrations_set_due_dates() {
         matches!(err, Error::Validation(ref e) if e[0].field == "service_type_id"),
         "{err}"
     );
+}
+
+/// The seeded Calibration Extension service type.
+async fn extension_type(store: &dyn Store) -> i64 {
+    store
+        .list_lookups(LookupKind::ServiceType, true)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.is_extension == Some(true))
+        .expect("Calibration Extension is seeded")
+        .id
+}
+
+#[tokio::test]
+async fn calibration_extensions_authorize_use_past_the_due_date() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let ext = extension_type(s).await;
+    let asset = s
+        .create_asset(&ctx(), asset_input(s, "EXT-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    // Calibrated long ago, so it's overdue now.
+    let old = Local::now().date_naive() - Days::new(400);
+    s.create_calibration(&ctx(), cal(asset.id, vendor, old))
+        .await
+        .unwrap();
+    let before = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(before.due_status, DueStatus::Overdue);
+
+    // Extend for 30 days from today: performer, certificate, and cost are cleared.
+    let today = Local::now().date_naive();
+    let mut input = cal(asset.id, vendor, today);
+    input.service_type_id = ext;
+    input.extension_days = Some(30);
+    let record = s.create_calibration(&ctx(), input.clone()).await.unwrap();
+    assert!(record.is_extension);
+    assert_eq!(record.extension_days, Some(30));
+    assert_eq!(record.calibrated_by, None);
+    assert_eq!(record.calibrated_by_name, None);
+    assert_eq!(record.certificate_number, None);
+    assert_eq!(record.cost_cents, None);
+    assert_eq!(record.next_due_date, Some(today + Days::new(30)));
+
+    // The next date moves; the last calibration doesn't; it's "extended" but still
+    // counted with the overdue items.
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.last_cal_date, before.last_cal_date);
+    assert_eq!(a.next_cal_date, Some(today + Days::new(30)));
+    assert!(a.calibration_extended);
+    assert_eq!(a.due_status, DueStatus::Extended);
+    let summary = polaris_core::schedule::DueSummary::from_assets(std::slice::from_ref(&a), today);
+    assert_eq!(summary.overdue, 1);
+    assert_eq!(summary.attention.len(), 1);
+
+    // A new calibration ends the extension.
+    s.create_calibration(&ctx(), cal(asset.id, vendor, today))
+        .await
+        .unwrap();
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert!(!a.calibration_extended);
+    assert_eq!(a.last_cal_date, Some(today));
+    assert_eq!(a.due_status, DueStatus::Current);
+
+    // An extension needs its length.
+    input.extension_days = None;
+    let err = s.create_calibration(&ctx(), input).await.unwrap_err();
+    assert!(
+        matches!(err, Error::Validation(ref e) if e[0].field == "extension_days"),
+        "{err}"
+    );
+
+    // Every other kind of service still needs someone who did it.
+    let mut nobody = cal(asset.id, vendor, today);
+    nobody.calibrated_by_id = None;
+    let err = s.create_calibration(&ctx(), nobody).await.unwrap_err();
+    assert!(
+        matches!(err, Error::Validation(ref e) if e[0].field == "calibrated_by_id"),
+        "{err}"
+    );
+
+    // The built-in type can't be deleted or made to count as a calibration.
+    assert!(matches!(
+        s.delete_lookup(&ctx(), LookupKind::ServiceType, ext).await,
+        Err(Error::Conflict(_))
+    ));
+    let mut rename = lookup("Extension");
+    rename.counts_as_calibration = Some(true);
+    let renamed = s
+        .update_lookup(&ctx(), LookupKind::ServiceType, ext, rename)
+        .await
+        .unwrap();
+    assert_eq!(renamed.counts_as_calibration, Some(false));
+    assert_eq!(renamed.is_extension, Some(true));
 }
 
 #[tokio::test]
@@ -1117,16 +1221,11 @@ async fn sign_ins_are_audited() {
     );
 }
 
-fn is_missing_reason<T>(r: polaris_core::Result<T>) -> bool {
-    matches!(r, Err(Error::Validation(e)) if e[0].field == "reason")
-}
-
 #[tokio::test]
-async fn edits_and_archives_require_a_reason() {
+async fn reasons_are_optional_and_recorded_when_given() {
     let h = harness().await;
     let s = h.store.as_ref();
     let vendor = provider(s).await;
-    // Creating needs no reason.
     let input = asset_input(s, "R-1", AssetKind::Instrument).await;
     let a = s
         .create_asset(&ctx_without_reason(), input.clone())
@@ -1137,28 +1236,35 @@ async fn edits_and_archives_require_a_reason() {
         .await
         .unwrap();
 
+    // Without a reason, edits and archives still go through.
     let nr = ctx_without_reason();
-    assert!(is_missing_reason(
-        s.update_asset(&nr, a.id, a.row_version, input).await
-    ));
-    assert!(is_missing_reason(
-        s.set_asset_archived(&nr, a.id, a.row_version, true).await
-    ));
-    assert!(is_missing_reason(
-        s.update_calibration(
+    let a = s
+        .update_asset(&nr, a.id, a.row_version, input)
+        .await
+        .unwrap();
+    let rec = s
+        .update_calibration(
             &nr,
             rec.id,
             rec.row_version,
-            cal(a.id, vendor, d(2026, 1, 6))
+            cal(a.id, vendor, d(2026, 1, 6)),
         )
         .await
-    ));
-    assert!(is_missing_reason(
-        s.set_calibration_archived(&nr, rec.id, rec.row_version, true)
-            .await
-    ));
-    // Nothing changed.
-    assert_eq!(s.get_asset(a.id).await.unwrap().row_version, a.row_version);
+        .unwrap();
+    s.set_calibration_archived(&nr, rec.id, rec.row_version, true)
+        .await
+        .unwrap();
+    let latest = &s.list_audit(&AuditFilter::default()).await.unwrap()[0];
+    assert_eq!(latest.action, AuditAction::Archive);
+    assert_eq!(latest.reason, None);
+
+    // With one, it's kept with the change.
+    let a = s.get_asset(a.id).await.unwrap();
+    s.set_asset_archived(&ctx(), a.id, a.row_version, true)
+        .await
+        .unwrap();
+    let latest = &s.list_audit(&AuditFilter::default()).await.unwrap()[0];
+    assert_eq!(latest.reason.as_deref(), Some("test change"));
 }
 
 #[tokio::test]
@@ -1394,7 +1500,7 @@ async fn attachments_link_to_assets_and_calibrations() {
 }
 
 #[tokio::test]
-async fn archiving_attachments_needs_a_reason_and_is_audited() {
+async fn archiving_attachments_is_audited() {
     let h = harness().await;
     let s = h.store.as_ref();
     let a = s
@@ -1405,11 +1511,6 @@ async fn archiving_attachments_needs_a_reason_and_is_audited() {
         .create_attachment(&ctx(), file(a.id, None, "ATT-3/photo.jpg"))
         .await
         .unwrap();
-
-    let no_reason = s
-        .set_attachment_archived(&ctx_without_reason(), f.id, f.row_version, true)
-        .await;
-    assert!(is_missing_reason(no_reason));
 
     let archived = s
         .set_attachment_archived(&ctx(), f.id, f.row_version, true)

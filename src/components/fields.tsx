@@ -370,14 +370,21 @@ export function CheckboxInput({
   isDisabled?: boolean;
 }) {
   return (
-    <Checkbox isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} className="flex flex-col items-start gap-0.5">
+    <Checkbox
+      variant="secondary"
+      isSelected={isSelected}
+      onChange={onChange}
+      isDisabled={isDisabled}
+      className="flex flex-col items-start gap-0.5"
+    >
       <Checkbox.Content className="flex cursor-pointer flex-row items-center gap-2">
-        <Checkbox.Control className="shrink-0">
+        {/* A visible border: the default unchecked box blends into cards, especially in dark mode. */}
+        <Checkbox.Control className="size-5 shrink-0 border-2 border-muted">
           <Checkbox.Indicator />
         </Checkbox.Control>
         <Label className="cursor-pointer">{label}</Label>
       </Checkbox.Content>
-      {description && <Description className="pl-7">{description}</Description>}
+      {description && <Description className="pl-8">{description}</Description>}
     </Checkbox>
   );
 }
