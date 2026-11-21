@@ -1,6 +1,7 @@
 import { Alert, Button, ComboBox, FieldError, Input, Label, ListBox, Modal, toast } from "@heroui/react";
 import { today, getLocalTimeZone } from "@internationalized/date";
 import { useEffect, useState } from "react";
+import type { CalibratedBy } from "../bindings/CalibratedBy";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { ConditionReceived } from "../bindings/ConditionReceived";
 import type { ConditionReturned } from "../bindings/ConditionReturned";
@@ -189,8 +190,9 @@ export function CalibrationDialog({
     <>
       <Modal>
         <Modal.Backdrop isOpen={isOpen} onOpenChange={onOpenChange} isDismissable={!saving}>
-          <Modal.Container size="lg" scroll="inside">
-            <Modal.Dialog>
+          {/* 48rem: half again the standard large dialog, for the two-column form. */}
+        <Modal.Container size="lg" scroll="inside">
+            <Modal.Dialog className="max-w-3xl!">
               <Modal.CloseTrigger />
               <Modal.Header>
                 <Modal.Heading>{title}</Modal.Heading>
@@ -248,20 +250,48 @@ export function CalibrationDialog({
                     onChange={(v) => set("certificate_number", v)}
                     error={errors.certificate_number}
                   />
-                  <LookupSelect
-                    kind="provider"
+                  <SelectInput<CalibratedBy>
                     label="Calibrated by"
-                    value={form.provider_id}
-                    onChange={(v) => set("provider_id", v)}
-                    lookups={lookups}
-                    error={errors.provider_id}
+                    value={form.calibrated_by}
+                    onChange={(v) => {
+                      if (!v || v === form.calibrated_by) return;
+                      set("calibrated_by", v);
+                      set("calibrated_by_id", null);
+                    }}
+                    options={[
+                      {
+                        id: "provider",
+                        label: "Calibration provider",
+                        description: "An outside calibration lab or an in-house technician.",
+                      },
+                      { id: "manufacturer", label: "Manufacturer", description: "The item's maker did the calibration." },
+                    ]}
                     isRequired
-                    placeholder={
-                      lookups.data && lookups.data.provider.length === 0
-                        ? "Add providers under Lists first"
-                        : "Select…"
-                    }
+                    allowEmpty={false}
                   />
+                  {form.calibrated_by === "manufacturer" ? (
+                    <LookupSelect
+                      key="manufacturer"
+                      kind="manufacturer"
+                      label="Manufacturer"
+                      value={form.calibrated_by_id}
+                      onChange={(v) => set("calibrated_by_id", v)}
+                      lookups={lookups}
+                      error={errors.calibrated_by_id}
+                      isRequired
+                    />
+                  ) : (
+                    <LookupSelect
+                      key="provider"
+                      kind="provider"
+                      label="Calibration provider"
+                      value={form.calibrated_by_id}
+                      onChange={(v) => set("calibrated_by_id", v)}
+                      lookups={lookups}
+                      error={errors.calibrated_by_id}
+                      isRequired
+                    />
+                  )}
                   <TextInput
                     label="Technician"
                     value={form.technician}

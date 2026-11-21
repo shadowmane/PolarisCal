@@ -10,8 +10,8 @@ use ts_rs::TS;
 
 use crate::auth::User;
 use crate::model::{
-    Asset, Attachment, AuditAction, AuditEntity, CalInterval, CalibrationRecord, IntervalUnit,
-    LookupItem,
+    Asset, Attachment, AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationRecord,
+    IntervalUnit, LookupItem,
 };
 use crate::{Error, Id, Result};
 
@@ -205,10 +205,18 @@ pub fn asset_snapshot(a: &Asset) -> Snapshot {
     ]
 }
 
+/// "Acme Labs", or "Fluke (manufacturer)".
+fn calibrated_by(r: &CalibrationRecord) -> String {
+    match r.calibrated_by {
+        CalibratedBy::Provider => r.calibrated_by_name.clone(),
+        CalibratedBy::Manufacturer => format!("{} (manufacturer)", r.calibrated_by_name),
+    }
+}
+
 pub fn calibration_snapshot(r: &CalibrationRecord) -> Snapshot {
     vec![
         ("Date of calibration", Some(r.cal_date.to_string())),
-        ("Calibrated by", Some(r.provider_name.clone())),
+        ("Calibrated by", Some(calibrated_by(r))),
         ("Technician", r.technician.clone()),
         ("Cost", cents(r.cost_cents)),
         ("Certificate number", r.certificate_number.clone()),

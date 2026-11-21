@@ -156,6 +156,15 @@ text_enum!(
 );
 
 text_enum!(
+    /// Who performed a calibration: a calibration provider (an outside lab or an
+    /// in-house technician), or the item's manufacturer.
+    CalibratedBy {
+        Provider => "provider",
+        Manufacturer => "manufacturer",
+    }
+);
+
+text_enum!(
     /// What an attached file is.
     AttachmentCategory {
         Certificate => "certificate",
@@ -321,8 +330,12 @@ pub struct CalibrationRecord {
     pub asset_id: Id,
     pub asset_tag: String,
     pub cal_date: NaiveDate,
-    pub provider_id: Id,
-    pub provider_name: String,
+    /// Whether a calibration provider or a manufacturer did the work.
+    pub calibrated_by: CalibratedBy,
+    /// The calibration provider's or manufacturer's id, per `calibrated_by`.
+    pub calibrated_by_id: Id,
+    /// The calibration provider's or manufacturer's name.
+    pub calibrated_by_name: String,
     /// The individual who performed the work, if recorded.
     pub technician: Option<String>,
     /// Cost in cents to avoid floating-point rounding.
@@ -346,7 +359,9 @@ pub struct CalibrationRecord {
 pub struct CalibrationInput {
     pub asset_id: Id,
     pub cal_date: NaiveDate,
-    pub provider_id: Id,
+    /// Whether `calibrated_by_id` is a calibration provider or a manufacturer.
+    pub calibrated_by: CalibratedBy,
+    pub calibrated_by_id: Id,
     pub technician: Option<String>,
     pub cost_cents: Option<i64>,
     pub certificate_number: Option<String>,

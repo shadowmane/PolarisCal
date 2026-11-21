@@ -169,7 +169,7 @@ export function outOfToleranceReport(
         c.asset_tag,
         t(a?.description),
         t(a?.location_name),
-        c.provider_name,
+        c.calibrated_by_name,
         t(c.technician),
         t(c.certificate_number),
         conditionReceivedMeta[c.condition_received].label,
@@ -259,7 +259,7 @@ export function historyReport(asset: Asset, calibrations: CalibrationRecord[]): 
     ],
     rows: records.map((c) => [
       c.cal_date,
-      c.provider_name,
+      c.calibrated_by_name,
       t(c.technician),
       t(c.certificate_number),
       conditionReceivedMeta[c.condition_received].label,
@@ -294,7 +294,7 @@ export function labelData(assets: Asset[], calibrations: CalibrationRecord[]): L
   }
   return assets.map((a) => {
     const c = latest.get(a.id);
-    const by = c ? [c.provider_name, c.technician].filter(Boolean).join(", ") : null;
+    const by = c ? [c.calibrated_by_name, c.technician].filter(Boolean).join(", ") : null;
     return {
       assetId: a.id,
       tag: a.asset_tag,

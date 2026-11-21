@@ -15,8 +15,8 @@ use polaris_core::auth::{
 };
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, AssetKind, Attachment, AttachmentFilter,
-    AuditAction, AuditEntity, CalInterval, CalibrationFilter, CalibrationInput, CalibrationRecord,
-    LookupInput, LookupItem, LookupKind, NewAttachment, Role, StoreInfo,
+    AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationFilter, CalibrationInput,
+    CalibrationRecord, LookupInput, LookupItem, LookupKind, NewAttachment, Role, StoreInfo,
 };
 use polaris_core::schedule::{add_interval, derive_dates, due_status};
 use polaris_core::transfer::{DataSet, TableCount};
@@ -470,7 +470,8 @@ async fn recompute_asset_dates(conn: &mut Conn, asset_id: Id) -> Result<()> {
 
 macro_rules! calibration_select {
     () => {
-        "SELECT r.id, r.asset_id, a.asset_tag, r.cal_date, r.provider_id, p.name AS provider_name,
+        "SELECT r.id, r.asset_id, a.asset_tag, r.cal_date, r.provider_id, r.manufacturer_id,
+                COALESCE(p.name, m.name) AS calibrated_by_name,
                 r.technician, r.cost_cents, r.certificate_number,
                 r.condition_received, r.condition_returned, r.next_due_date, r.notes,
                 (SELECT COUNT(*) FROM attachments f
@@ -478,18 +479,32 @@ macro_rules! calibration_select {
                 r.is_archived, r.row_version, r.created_at, r.updated_at
          FROM calibration_records r
          JOIN assets a                ON a.id = r.asset_id
-         JOIN calibration_providers p ON p.id = r.provider_id"
+         LEFT JOIN calibration_providers p ON p.id = r.provider_id
+         LEFT JOIN manufacturers m         ON m.id = r.manufacturer_id"
     };
 }
 
 fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
+    // Exactly one of the two is set (a CHECK constraint guarantees it).
+    let provider: Option<Id> = row.get("provider_id")?;
+    let manufacturer: Option<Id> = row.get("manufacturer_id")?;
+    let (calibrated_by, calibrated_by_id) = match (provider, manufacturer) {
+        (Some(id), _) => (CalibratedBy::Provider, id),
+        (None, Some(id)) => (CalibratedBy::Manufacturer, id),
+        (None, None) => {
+            return Err(Error::Database(
+                "a calibration record says nobody calibrated it".into(),
+            ));
+        }
+    };
     Ok(CalibrationRecord {
         id: row.get("id")?,
         asset_id: row.get("asset_id")?,
         asset_tag: row.get("asset_tag")?,
         cal_date: row.get("cal_date")?,
-        provider_id: row.get("provider_id")?,
-        provider_name: row.get("provider_name")?,
+        calibrated_by,
+        calibrated_by_id,
+        calibrated_by_name: row.get("calibrated_by_name")?,
         technician: row.get("technician")?,
         cost_cents: row.get("cost_cents")?,
         certificate_number: row.get("certificate_number")?,
@@ -588,14 +603,31 @@ fn lookup_extra(kind: LookupKind, input: &LookupInput) -> Option<bool> {
 }
 
 /// Where a list entry can be used: (table, column, what one row is called).
-fn lookup_usage(kind: LookupKind) -> (&'static str, &'static str, &'static str) {
+type Usage = (&'static str, &'static str, &'static str);
+
+fn lookup_usage(kind: LookupKind) -> &'static [Usage] {
     match kind {
-        LookupKind::Location => ("assets", "location_id", "item"),
-        LookupKind::Department => ("assets", "department_id", "item"),
-        LookupKind::Owner => ("assets", "owner_id", "item"),
-        LookupKind::Manufacturer => ("assets", "manufacturer_id", "item"),
-        LookupKind::Status => ("assets", "status_id", "item"),
-        LookupKind::Provider => ("calibration_records", "provider_id", "calibration record"),
+        LookupKind::Location => &[("assets", "location_id", "item")],
+        LookupKind::Department => &[("assets", "department_id", "item")],
+        LookupKind::Owner => &[("assets", "owner_id", "item")],
+        LookupKind::Manufacturer => &[
+            ("assets", "manufacturer_id", "item"),
+            (
+                "calibration_records",
+                "manufacturer_id",
+                "calibration record",
+            ),
+        ],
+        LookupKind::Status => &[("assets", "status_id", "item")],
+        LookupKind::Provider => &[("calibration_records", "provider_id", "calibration record")],
+    }
+}
+
+/// The SQL columns for who calibrated: (provider_id, manufacturer_id).
+fn calibrated_by_columns(input: &CalibrationInput) -> (Option<Id>, Option<Id>) {
+    match input.calibrated_by {
+        CalibratedBy::Provider => (Some(input.calibrated_by_id), None),
+        CalibratedBy::Manufacturer => (None, Some(input.calibrated_by_id)),
     }
 }
 
@@ -1312,20 +1344,25 @@ impl Store for SqlStore {
 
     async fn delete_lookup(&self, ctx: &WriteContext, kind: LookupKind, id: Id) -> Result<()> {
         let (table, _) = lookup_table(kind);
-        let (used_table, used_column, noun) = lookup_usage(kind);
         let mut tx = self.begin().await?;
         let item = fetch_lookup(&mut tx, kind, id).await?;
-        let uses = tx
-            .scalar(
-                &format!("SELECT COUNT(*) AS n FROM {used_table} WHERE {used_column} = ?1"),
-                params![id],
-            )
-            .await?;
-        if uses > 0 {
-            let plural = if uses == 1 { "" } else { "s" };
+        let mut uses = Vec::new();
+        for (used_table, used_column, noun) in lookup_usage(kind) {
+            let n = tx
+                .scalar(
+                    &format!("SELECT COUNT(*) AS n FROM {used_table} WHERE {used_column} = ?1"),
+                    params![id],
+                )
+                .await?;
+            if n > 0 {
+                uses.push(format!("{n} {noun}{}", if n == 1 { "" } else { "s" }));
+            }
+        }
+        if !uses.is_empty() {
             return Err(Error::Conflict(format!(
-                "'{}' is used by {uses} {noun}{plural} (including archived ones), so it can't be deleted. Make it inactive instead.",
-                item.name
+                "'{}' is used by {} (including archived ones), so it can't be deleted. Make it inactive instead.",
+                item.name,
+                uses.join(" and ")
             )));
         }
         if kind == LookupKind::Status
@@ -1817,12 +1854,13 @@ impl Store for SqlStore {
             .insert(
                 "INSERT INTO calibration_records (
                     asset_id, cal_date, provider_id, technician, cost_cents, certificate_number,
-                    condition_received, condition_returned, next_due_date, notes, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                    condition_received, condition_returned, next_due_date, notes, created_at, updated_at,
+                    manufacturer_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)",
                 params![
                     input.asset_id,
                     input.cal_date,
-                    input.provider_id,
+                    calibrated_by_columns(&input).0,
                     &input.technician,
                     input.cost_cents,
                     &input.certificate_number,
@@ -1830,7 +1868,8 @@ impl Store for SqlStore {
                     input.condition_returned.as_str(),
                     next_due,
                     &input.notes,
-                    now()
+                    now(),
+                    calibrated_by_columns(&input).1
                 ],
             )
             .await
@@ -1874,13 +1913,14 @@ impl Store for SqlStore {
                 "UPDATE calibration_records SET
                     cal_date = ?3, provider_id = ?4, technician = ?5, cost_cents = ?6,
                     certificate_number = ?7, condition_received = ?8, condition_returned = ?9,
-                    next_due_date = ?10, notes = ?11, updated_at = ?12, row_version = row_version + 1
+                    next_due_date = ?10, notes = ?11, updated_at = ?12, manufacturer_id = ?13,
+                    row_version = row_version + 1
                  WHERE id = ?1 AND row_version = ?2",
                 params![
                     id,
                     expected_version,
                     input.cal_date,
-                    input.provider_id,
+                    calibrated_by_columns(&input).0,
                     &input.technician,
                     input.cost_cents,
                     &input.certificate_number,
@@ -1888,7 +1928,8 @@ impl Store for SqlStore {
                     input.condition_returned.as_str(),
                     next_due,
                     &input.notes,
-                    now()
+                    now(),
+                    calibrated_by_columns(&input).1
                 ],
             )
             .await

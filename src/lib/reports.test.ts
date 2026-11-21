@@ -58,8 +58,9 @@ function cal(id: number, assetId: number, date: string, over: Partial<Calibratio
     asset_id: assetId,
     asset_tag: `A${assetId}`,
     cal_date: date,
-    provider_id: 1,
-    provider_name: "Acme Labs",
+    calibrated_by: "provider",
+    calibrated_by_id: 1,
+    calibrated_by_name: "Acme Labs",
     technician: null,
     cost_cents: 12_500,
     certificate_number: "C-1",
@@ -157,9 +158,9 @@ describe("labels", () => {
     const [label] = labelData(
       [a],
       [
-        cal(1, 1, "2025-01-01", { provider_name: "Old Lab" }),
+        cal(1, 1, "2025-01-01", { calibrated_by_name: "Old Lab" }),
         cal(2, 1, "2026-01-01", { technician: "J. Smith" }),
-        cal(3, 1, "2026-06-01", { is_archived: true, provider_name: "Archived Lab" }),
+        cal(3, 1, "2026-06-01", { is_archived: true, calibrated_by_name: "Archived Lab" }),
       ],
     );
     expect(label).toMatchObject({ tag: "DMM-1", calibrated: "2026-01-01", due: "2027-01-01", by: "Acme Labs, J. Smith" });

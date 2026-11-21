@@ -282,6 +282,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "interval end of month",
         include_str!("../../migrations/mssql/0006_interval_end_of_month.sql"),
     ),
+    (
+        7,
+        "calibrated by manufacturer",
+        include_str!("../../migrations/mssql/0007_calibrated_by_manufacturer.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

@@ -178,7 +178,7 @@ function HistoryCard({
                       {r.is_archived && <span className="ml-2 text-xs text-muted">(archived)</span>}
                     </Table.Cell>
                     <Table.Cell>
-                      {r.provider_name}
+                      {r.calibrated_by_name}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
                     </Table.Cell>
                     <Table.Cell>
@@ -302,11 +302,6 @@ export function AssetDetailPage() {
             <p className="mt-1 text-sm text-muted">{asset.description}</p>
           </div>
           <div className={`flex shrink-0 items-center gap-2 ${canEdit ? "" : "hidden"}`}>
-            {!asset.is_archived && (
-              <Button onPress={() => setDialog({ open: true })}>
-                <ClipboardCheck className="size-4" /> Record calibration
-              </Button>
-            )}
             <Button variant="secondary" onPress={() => navigate(`/assets/${asset.id}/edit`)}>
               <Pencil className="size-4" /> Edit
             </Button>

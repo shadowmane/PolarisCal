@@ -47,7 +47,7 @@ These were agreed on before development started (2026-11-20).
 | Certificates | Files stored on a configured shared folder/UNC path; the database stores the path. |
 | Change history | Full audit trail: who, when, why, old value, new value. Records are archived, never deleted; only list entries nothing uses yet can be deleted (audited). |
 | Hierarchy | A System contains Instruments. Each item keeps its own calibration schedule. |
-| Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists; technicians can add entries (but not edit or delete them). |
+| Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists; technicians can add entries (but not edit or delete them). A calibration is done by either a calibration provider or the item's manufacturer. |
 
 ## Core rules
 
@@ -138,7 +138,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 6) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 7) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |

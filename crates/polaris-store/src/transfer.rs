@@ -139,6 +139,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("asset_id", Int),
             ("cal_date", Date),
             ("provider_id", Int),
+            ("manufacturer_id", Int),
             ("technician", Text),
             ("cost_cents", Int),
             ("certificate_number", Text),

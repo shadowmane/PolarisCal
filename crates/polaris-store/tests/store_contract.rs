@@ -195,7 +195,8 @@ fn cal(asset_id: i64, provider_id: i64, date: NaiveDate) -> CalibrationInput {
     CalibrationInput {
         asset_id,
         cal_date: date,
-        provider_id,
+        calibrated_by: CalibratedBy::Provider,
+        calibrated_by_id: provider_id,
         technician: Some("  J. Smith ".into()),
         cost_cents: Some(12_500),
         certificate_number: Some("CERT-001".into()),
@@ -210,7 +211,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 6);
+    assert_eq!(info.schema_version, 7);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -537,7 +538,8 @@ async fn calibration_records_drive_asset_dates() {
         .unwrap();
     assert_eq!(first.technician.as_deref(), Some("J. Smith"));
     assert_eq!(first.next_due_date, Some(d(2026, 6, 10)));
-    assert_eq!(first.provider_name, "Acme Calibration Labs");
+    assert_eq!(first.calibrated_by, CalibratedBy::Provider);
+    assert_eq!(first.calibrated_by_name, "Acme Calibration Labs");
 
     let latest = s
         .create_calibration(&ctx(), cal(asset.id, vendor, d(2026, 6, 1)))
@@ -649,6 +651,71 @@ async fn end_of_month_intervals_are_due_on_the_last_day() {
     assert!(change.iter().any(|c| c.field == "Calibration interval"
         && c.old.as_deref() == Some("12 months, end of month")
         && c.new.as_deref() == Some("12 months")));
+}
+
+#[tokio::test]
+async fn a_manufacturer_can_be_who_calibrated() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let maker = s
+        .create_lookup(&ctx(), LookupKind::Manufacturer, lookup("Keysight"))
+        .await
+        .unwrap();
+    let asset = s
+        .create_asset(
+            &ctx(),
+            asset_input(s, "SCOPE-1", AssetKind::Instrument).await,
+        )
+        .await
+        .unwrap();
+    let mut input = cal(asset.id, maker.id, d(2026, 2, 1));
+    input.calibrated_by = CalibratedBy::Manufacturer;
+    let record = s.create_calibration(&ctx(), input.clone()).await.unwrap();
+    assert_eq!(record.calibrated_by, CalibratedBy::Manufacturer);
+    assert_eq!(record.calibrated_by_id, maker.id);
+    assert_eq!(record.calibrated_by_name, "Keysight");
+    let created = &s.list_audit(&AuditFilter::default()).await.unwrap()[0];
+    assert!(
+        created
+            .changes
+            .iter()
+            .any(|c| c.field == "Calibrated by"
+                && c.new.as_deref() == Some("Keysight (manufacturer)"))
+    );
+
+    // A manufacturer that calibrated something can't be deleted.
+    let err = s
+        .delete_lookup(&ctx(), LookupKind::Manufacturer, maker.id)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Conflict(ref m) if m.contains("1 calibration record")),
+        "{err}"
+    );
+
+    // Switching to a calibration provider clears the manufacturer.
+    let vendor = provider(s).await;
+    input.calibrated_by = CalibratedBy::Provider;
+    input.calibrated_by_id = vendor;
+    let edited = s
+        .update_calibration(&ctx(), record.id, record.row_version, input.clone())
+        .await
+        .unwrap();
+    assert_eq!(edited.calibrated_by, CalibratedBy::Provider);
+    assert_eq!(edited.calibrated_by_name, "Acme Calibration Labs");
+    // Nothing names the manufacturer any more, so now it can be deleted.
+    s.delete_lookup(&ctx(), LookupKind::Manufacturer, maker.id)
+        .await
+        .unwrap();
+
+    // An id that doesn't exist is reported, not stored.
+    input.calibrated_by = CalibratedBy::Manufacturer;
+    input.calibrated_by_id = 9_999;
+    let err = s
+        .update_calibration(&ctx(), edited.id, edited.row_version, input)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Validation(_)), "{err}");
 }
 
 #[tokio::test]

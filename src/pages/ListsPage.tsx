@@ -17,7 +17,9 @@ function LookupTable({ kind }: { kind: LookupKind }) {
   const { can } = useAuth();
   const isAdmin = can("admin");
   const canAdd = can("edit_records");
-  const byId = new Map((data ?? []).map((i) => [i.id, i]));
+  // Alphabetical here; dropdowns elsewhere follow each entry's sort order.
+  const items = [...(data ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const byId = new Map(items.map((i) => [i.id, i]));
   const nextSortOrder = Math.max(0, ...(data ?? []).map((i) => i.sort_order)) + 10;
 
   return (
@@ -62,7 +64,7 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                 <Table.Column>State</Table.Column>
               </Table.Header>
               <Table.Body
-                items={data ?? []}
+                items={items}
                 renderEmptyState={() => (
                   <EmptyNote icon={<ListChecks className="size-5" />} title={`No ${meta.label.toLowerCase()} yet`}>
                     {canAdd ? "Add the first one with the button above." : "An administrator or technician can add entries."}

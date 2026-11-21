@@ -99,7 +99,7 @@ export function CalibrationsPage() {
                       </Link>
                     </Table.Cell>
                     <Table.Cell>
-                      {r.provider_name}
+                      {r.calibrated_by_name}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
                     </Table.Cell>
                     <Table.Cell>

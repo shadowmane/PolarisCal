@@ -5,6 +5,7 @@ import { type DateValue, parseDate } from "@internationalized/date";
 import type { Asset } from "../bindings/Asset";
 import type { AssetInput } from "../bindings/AssetInput";
 import type { AssetKind } from "../bindings/AssetKind";
+import type { CalibratedBy } from "../bindings/CalibratedBy";
 import type { CalibrationInput } from "../bindings/CalibrationInput";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { ConditionReceived } from "../bindings/ConditionReceived";
@@ -191,7 +192,9 @@ export function formToAssetInput(f: AssetForm): Converted<AssetInput> {
 export interface CalibrationForm {
   asset_id: number | null;
   cal_date: string | null;
-  provider_id: number | null;
+  /** A calibration provider, or the manufacturer. */
+  calibrated_by: CalibratedBy;
+  calibrated_by_id: number | null;
   technician: string;
   /** Dollars as typed; converted to cents on save. */
   cost: number | null;
@@ -205,7 +208,8 @@ export function emptyCalibrationForm(defaults: Partial<CalibrationForm> = {}): C
   return {
     asset_id: null,
     cal_date: null,
-    provider_id: null,
+    calibrated_by: "provider",
+    calibrated_by_id: null,
     technician: "",
     cost: null,
     certificate_number: "",
@@ -220,7 +224,8 @@ export function calibrationToForm(r: CalibrationRecord): CalibrationForm {
   return {
     asset_id: r.asset_id,
     cal_date: r.cal_date,
-    provider_id: r.provider_id,
+    calibrated_by: r.calibrated_by,
+    calibrated_by_id: r.calibrated_by_id,
     technician: r.technician ?? "",
     cost: centsToDollars(r.cost_cents),
     certificate_number: r.certificate_number ?? "",
@@ -234,7 +239,9 @@ export function formToCalibrationInput(f: CalibrationForm): Converted<Calibratio
   const errors: FieldErrors = {};
   if (f.asset_id == null) errors.asset_id = "Choose the item that was calibrated.";
   if (!f.cal_date) errors.cal_date = "Calibration date is required.";
-  if (f.provider_id == null) errors.provider_id = "Choose who performed the calibration.";
+  if (f.calibrated_by_id == null)
+    errors.calibrated_by_id =
+      f.calibrated_by === "manufacturer" ? "Choose the manufacturer." : "Choose the calibration provider.";
   if (!f.condition_received) errors.condition_received = "Condition received is required.";
   if (!f.condition_returned) errors.condition_returned = "Condition returned is required.";
   const cents = dollarsToCents(f.cost);
@@ -246,7 +253,8 @@ export function formToCalibrationInput(f: CalibrationForm): Converted<Calibratio
     value: {
       asset_id: f.asset_id!,
       cal_date: f.cal_date!,
-      provider_id: f.provider_id!,
+      calibrated_by: f.calibrated_by,
+      calibrated_by_id: f.calibrated_by_id!,
       technician: optionalText(f.technician),
       cost_cents: cents,
       certificate_number: optionalText(f.certificate_number),

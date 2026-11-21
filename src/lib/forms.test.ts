@@ -161,16 +161,16 @@ function formToAssetInputValue() {
 }
 
 describe("calibration form", () => {
-  it("requires item, date, provider, and both conditions", () => {
+  it("requires item, date, who calibrated, and both conditions", () => {
     const r = formToCalibrationInput(emptyCalibrationForm());
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(Object.keys(r.errors).sort()).toEqual([
       "asset_id",
       "cal_date",
+      "calibrated_by_id",
       "condition_received",
       "condition_returned",
-      "provider_id",
     ]);
   });
 
@@ -179,7 +179,8 @@ describe("calibration form", () => {
       emptyCalibrationForm({
         asset_id: 1,
         cal_date: "2026-06-01",
-        provider_id: 2,
+        calibrated_by: "manufacturer",
+        calibrated_by_id: 2,
         condition_received: "out_of_tolerance",
         condition_returned: "pass",
         cost: 149.99,
@@ -190,6 +191,7 @@ describe("calibration form", () => {
     if (!r.ok) return;
     expect(r.value.cost_cents).toBe(14999);
     expect(r.value.technician).toBeNull();
+    expect([r.value.calibrated_by, r.value.calibrated_by_id]).toEqual(["manufacturer", 2]);
   });
 });
 
