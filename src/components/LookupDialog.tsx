@@ -6,6 +6,8 @@ import type { LookupKind } from "../bindings/LookupKind";
 import { ApiError, api } from "../lib/api";
 import { lookupKindMeta } from "../lib/format";
 import { emptyLookupInput, type FieldErrors, fieldErrors, lookupToInput } from "../lib/forms";
+import { Trash2 } from "lucide-react";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { NumberInput, SwitchInput, TextAreaInput, TextInput } from "./fields";
 
 /** Add or edit one entry in a pick list. */
@@ -16,6 +18,7 @@ export function LookupDialog({
   isOpen,
   onOpenChange,
   onSaved,
+  onDeleted,
 }: {
   kind: LookupKind;
   item?: LookupItem;
@@ -23,12 +26,15 @@ export function LookupDialog({
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (item: LookupItem) => void;
+  /** When given, editing an existing entry offers Delete (refused if the entry is in use). */
+  onDeleted?: () => void;
 }) {
   const meta = lookupKindMeta[kind];
   const [input, setInput] = useState<LookupInput>(emptyLookupInput(kind));
   const [errors, setErrors] = useState<FieldErrors>({});
   const [formError, setFormError] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -145,6 +151,11 @@ export function LookupDialog({
               </form>
             </Modal.Body>
             <Modal.Footer>
+              {item && onDeleted && (
+                <Button variant="danger-soft" className="mr-auto" isDisabled={saving} onPress={() => setConfirmDelete(true)}>
+                  <Trash2 className="size-4" /> Delete
+                </Button>
+              )}
               <Button slot="close" variant="tertiary" isDisabled={saving}>
                 Cancel
               </Button>
@@ -155,6 +166,24 @@ export function LookupDialog({
           </Modal.Dialog>
         </Modal.Container>
       </Modal.Backdrop>
+      {item && onDeleted && (
+        <ConfirmDialog
+          isOpen={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          title={`Delete ${item.name}?`}
+          confirmLabel="Delete"
+          onConfirm={async () => {
+            await api.deleteLookup(kind, item.id);
+            toast.success(`Deleted ${item.name}`);
+            setConfirmDelete(false);
+            onOpenChange(false);
+            onDeleted();
+          }}
+        >
+          This removes it from the {meta.label.toLowerCase()} list for good. Entries that items or calibration
+          records already use can't be deleted; make them inactive instead.
+        </ConfirmDialog>
+      )}
     </Modal>
   );
 }

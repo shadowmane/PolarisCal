@@ -96,7 +96,7 @@ describe("asset form", () => {
     expect(r.value.asset_tag).toBe("DMM-1");
     expect(r.value.description).toBe("Multimeter");
     expect(r.value.serial_number).toBeNull();
-    expect(r.value.cal_interval).toEqual({ value: 12, unit: "months" });
+    expect(r.value.cal_interval).toEqual({ value: 12, unit: "months", end_of_month: false });
   });
 
   it("reports missing required fields", () => {

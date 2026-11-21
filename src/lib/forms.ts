@@ -91,6 +91,7 @@ export interface AssetForm {
   warranty_end_date: string | null;
   interval_value: number | null;
   interval_unit: IntervalUnit;
+  interval_end_of_month: boolean;
   in_service_date: string | null;
   first_cal_date: string | null;
   last_cal_date: string | null;
@@ -113,6 +114,7 @@ export function emptyAssetForm(defaults: Partial<AssetForm> = {}): AssetForm {
     warranty_end_date: null,
     interval_value: 12,
     interval_unit: "months",
+    interval_end_of_month: false,
     in_service_date: null,
     first_cal_date: null,
     last_cal_date: null,
@@ -137,6 +139,7 @@ export function assetToForm(a: Asset): AssetForm {
     warranty_end_date: a.warranty_end_date,
     interval_value: a.cal_interval?.value ?? null,
     interval_unit: a.cal_interval?.unit ?? "months",
+    interval_end_of_month: a.cal_interval?.end_of_month ?? false,
     in_service_date: a.in_service_date,
     first_cal_date: a.first_cal_date,
     last_cal_date: a.last_cal_date_entered,
@@ -170,7 +173,9 @@ export function formToAssetInput(f: AssetForm): Converted<AssetInput> {
       owner_id: f.owner_id,
       status_id: f.status_id!,
       warranty_end_date: f.warranty_end_date,
-      cal_interval: hasInterval ? { value: f.interval_value!, unit: f.interval_unit } : null,
+      cal_interval: hasInterval
+        ? { value: f.interval_value!, unit: f.interval_unit, end_of_month: f.interval_end_of_month }
+        : null,
       in_service_date: f.in_service_date,
       first_cal_date: f.first_cal_date,
       last_cal_date: f.last_cal_date,

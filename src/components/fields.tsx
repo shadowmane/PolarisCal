@@ -3,6 +3,7 @@
 
 import {
   Calendar,
+  Checkbox,
   DateField,
   DatePicker,
   Description,
@@ -296,6 +297,8 @@ export function SelectInput<K extends string | number>({
   );
 }
 
+// The clickable part of a HeroUI switch is `Switch.Content`, so the control must sit
+// inside it; descriptions go beside it, under the root.
 export function SwitchInput({
   label,
   description,
@@ -310,14 +313,14 @@ export function SwitchInput({
   isDisabled?: boolean;
 }) {
   return (
-    <Switch isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} className="flex-row items-start gap-3">
-      <Switch.Control className="mt-0.5 shrink-0">
-        <Switch.Thumb />
-      </Switch.Control>
-      <Switch.Content className="flex flex-col items-start gap-0.5">
-        <Label>{label}</Label>
-        {description && <Description>{description}</Description>}
+    <Switch isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} className="flex flex-col items-start gap-0.5">
+      <Switch.Content className="flex cursor-pointer flex-row items-start gap-3">
+        <Switch.Control className="mt-0.5 shrink-0">
+          <Switch.Thumb />
+        </Switch.Control>
+        <Label className="cursor-pointer">{label}</Label>
       </Switch.Content>
+      {description && <Description className="pl-[3.25rem]">{description}</Description>}
     </Switch>
   );
 }
@@ -333,14 +336,41 @@ export function ToggleSwitch({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <Switch size="sm" isSelected={isSelected} onChange={onChange} className="flex-row items-center gap-2">
-      <Switch.Control className="shrink-0">
-        <Switch.Thumb />
-      </Switch.Control>
-      <Switch.Content>
+    <Switch size="sm" isSelected={isSelected} onChange={onChange}>
+      <Switch.Content className="flex cursor-pointer flex-row items-center gap-2">
+        <Switch.Control className="shrink-0">
+          <Switch.Thumb />
+        </Switch.Control>
         <span className="text-sm whitespace-nowrap">{label}</span>
       </Switch.Content>
     </Switch>
+  );
+}
+
+/** A checkbox with a label and optional description. The whole label is clickable. */
+export function CheckboxInput({
+  label,
+  description,
+  isSelected,
+  onChange,
+  isDisabled,
+}: {
+  label: string;
+  description?: string;
+  isSelected: boolean;
+  onChange: (v: boolean) => void;
+  isDisabled?: boolean;
+}) {
+  return (
+    <Checkbox isSelected={isSelected} onChange={onChange} isDisabled={isDisabled} className="flex flex-col items-start gap-0.5">
+      <Checkbox.Content className="flex cursor-pointer flex-row items-center gap-2">
+        <Checkbox.Control className="shrink-0">
+          <Checkbox.Indicator />
+        </Checkbox.Control>
+        <Label className="cursor-pointer">{label}</Label>
+      </Checkbox.Content>
+      {description && <Description className="pl-7">{description}</Description>}
+    </Checkbox>
   );
 }
 

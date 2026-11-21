@@ -27,7 +27,8 @@ export function formatCents(cents: number | null | undefined): string {
 export function formatInterval(interval: CalInterval | null): string {
   if (!interval) return EMPTY;
   const unit = interval.unit === "months" ? "month" : "day";
-  return `${interval.value} ${unit}${interval.value === 1 ? "" : "s"}`;
+  const eom = interval.end_of_month ? ", end of month" : "";
+  return `${interval.value} ${unit}${interval.value === 1 ? "" : "s"}${eom}`;
 }
 
 type ChipColor = "default" | "accent" | "success" | "warning" | "danger";
@@ -84,6 +85,7 @@ export const auditActionMeta: Record<AuditAction, { label: string; color: ChipCo
   update: { label: "Edited", color: "accent" },
   archive: { label: "Archived", color: "warning" },
   restore: { label: "Restored", color: "accent" },
+  delete: { label: "Deleted", color: "danger" },
   sign_in: { label: "Signed in", color: "default" },
   sign_in_failed: { label: "Sign-in failed", color: "danger" },
   sign_out: { label: "Signed out", color: "default" },

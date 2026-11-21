@@ -172,6 +172,7 @@ async fn asset_input(store: &dyn Store, tag: &str, kind: AssetKind) -> AssetInpu
         cal_interval: Some(CalInterval {
             value: 12,
             unit: IntervalUnit::Months,
+            end_of_month: false,
         }),
         in_service_date: None,
         first_cal_date: None,
@@ -209,7 +210,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 5);
+    assert_eq!(info.schema_version, 6);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -315,6 +316,95 @@ async fn lookups_create_update_and_reject_duplicates() {
         .update_lookup(&ctx(), LookupKind::Location, 9999, lookup("x"))
         .await;
     assert!(matches!(missing, Err(Error::NotFound { .. })));
+}
+
+#[tokio::test]
+async fn unused_list_entries_can_be_deleted_but_used_ones_cannot() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+
+    // Unused: deleted, gone from the list, and audited with what it held.
+    let mut spare = lookup("Spare room");
+    spare.description = Some("Never used".into());
+    let spare = s
+        .create_lookup(&ctx(), LookupKind::Location, spare)
+        .await
+        .unwrap();
+    s.delete_lookup(&ctx(), LookupKind::Location, spare.id)
+        .await
+        .unwrap();
+    assert!(
+        s.list_lookups(LookupKind::Location, true)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let entry = &s.list_audit(&AuditFilter::default()).await.unwrap()[0];
+    assert_eq!(entry.action, AuditAction::Delete);
+    assert_eq!(entry.entity, AuditEntity::Lookup);
+    assert!(
+        entry.changes.iter().any(|c| c.field == "Name"
+            && c.old.as_deref() == Some("Spare room")
+            && c.new.is_none())
+    );
+    assert!(matches!(
+        s.delete_lookup(&ctx(), LookupKind::Location, spare.id)
+            .await,
+        Err(Error::NotFound { .. })
+    ));
+
+    // Used by an item, even an archived one: refused.
+    let maker = s
+        .create_lookup(&ctx(), LookupKind::Manufacturer, lookup("Fluke"))
+        .await
+        .unwrap();
+    let mut input = asset_input(s, "DMM-1", AssetKind::Instrument).await;
+    input.manufacturer_id = Some(maker.id);
+    let asset = s.create_asset(&ctx(), input).await.unwrap();
+    s.set_asset_archived(&ctx(), asset.id, asset.row_version, true)
+        .await
+        .unwrap();
+    let err = s
+        .delete_lookup(&ctx(), LookupKind::Manufacturer, maker.id)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Conflict(ref m) if m.contains("used by 1 item")),
+        "{err}"
+    );
+
+    // Used by a calibration record: refused.
+    let vendor = provider(s).await;
+    let other = s
+        .create_asset(&ctx(), asset_input(s, "DMM-2", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    s.create_calibration(&ctx(), cal(other.id, vendor, d(2026, 1, 5)))
+        .await
+        .unwrap();
+    let err = s
+        .delete_lookup(&ctx(), LookupKind::Provider, vendor)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Conflict(ref m) if m.contains("calibration record")),
+        "{err}"
+    );
+
+    // Unused statuses can go, but never the last one.
+    let active = status_id(s, "Active").await;
+    for status in s.list_lookups(LookupKind::Status, true).await.unwrap() {
+        if status.id != active {
+            s.delete_lookup(&ctx(), LookupKind::Status, status.id)
+                .await
+                .unwrap();
+        }
+    }
+    let err = s
+        .delete_lookup(&ctx(), LookupKind::Status, active)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Conflict(_)), "{err}");
 }
 
 #[tokio::test]
@@ -512,6 +602,7 @@ async fn calibration_records_drive_asset_dates() {
     edit.cal_interval = Some(CalInterval {
         value: 6,
         unit: IntervalUnit::Months,
+        end_of_month: false,
     });
     let a = s
         .update_asset(&ctx(), a.id, a.row_version, edit)
@@ -519,6 +610,45 @@ async fn calibration_records_drive_asset_dates() {
         .unwrap();
     assert_eq!(a.next_cal_date, Some(d(2025, 12, 10)));
     assert_eq!(a.due_status, DueStatus::Overdue);
+}
+
+#[tokio::test]
+async fn end_of_month_intervals_are_due_on_the_last_day() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let mut input = asset_input(s, "EOM-1", AssetKind::Instrument).await;
+    input.cal_interval = Some(CalInterval {
+        value: 12,
+        unit: IntervalUnit::Months,
+        end_of_month: true,
+    });
+    let asset = s.create_asset(&ctx(), input.clone()).await.unwrap();
+    assert!(asset.cal_interval.unwrap().end_of_month);
+
+    let record = s
+        .create_calibration(&ctx(), cal(asset.id, vendor, d(2026, 11, 20)))
+        .await
+        .unwrap();
+    assert_eq!(record.next_due_date, Some(d(2027, 11, 30)));
+    let asset = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(asset.next_cal_date, Some(d(2027, 11, 30)));
+
+    // Turning it off recomputes the due date from the calibration date itself.
+    input.cal_interval = Some(CalInterval {
+        value: 12,
+        unit: IntervalUnit::Months,
+        end_of_month: false,
+    });
+    let asset = s
+        .update_asset(&ctx(), asset.id, asset.row_version, input)
+        .await
+        .unwrap();
+    assert_eq!(asset.next_cal_date, Some(d(2027, 11, 20)));
+    let change = &s.list_audit(&AuditFilter::default()).await.unwrap()[0].changes;
+    assert!(change.iter().any(|c| c.field == "Calibration interval"
+        && c.old.as_deref() == Some("12 months, end of month")
+        && c.new.as_deref() == Some("12 months")));
 }
 
 #[tokio::test]

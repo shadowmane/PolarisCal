@@ -1,6 +1,6 @@
 //! Calibration scheduling rules: interval arithmetic, derived dates, and due status.
 
-use chrono::{Days, Months, NaiveDate};
+use chrono::{Datelike, Days, Months, NaiveDate};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -12,10 +12,22 @@ pub const DUE_SOON_DAYS: i64 = 30;
 /// Adds a calibration interval to a date. Month arithmetic clamps to the end
 /// of the month, so Jan 31 + 1 month = Feb 28 (or 29).
 pub fn add_interval(date: NaiveDate, interval: CalInterval) -> Option<NaiveDate> {
-    match interval.unit {
+    let due = match interval.unit {
         IntervalUnit::Days => date.checked_add_days(Days::new(interval.value.into())),
         IntervalUnit::Months => date.checked_add_months(Months::new(interval.value)),
+    }?;
+    if interval.end_of_month {
+        end_of_month(due)
+    } else {
+        Some(due)
     }
+}
+
+/// The last day of `date`'s month.
+pub fn end_of_month(date: NaiveDate) -> Option<NaiveDate> {
+    NaiveDate::from_ymd_opt(date.year(), date.month(), 1)?
+        .checked_add_months(Months::new(1))?
+        .pred_opt()
 }
 
 /// The schedule dates stored on an asset that the system maintains.
@@ -129,6 +141,7 @@ mod tests {
     const MONTHS_12: CalInterval = CalInterval {
         value: 12,
         unit: IntervalUnit::Months,
+        end_of_month: false,
     };
 
     #[test]
@@ -136,6 +149,7 @@ mod tests {
         let one_month = CalInterval {
             value: 1,
             unit: IntervalUnit::Months,
+            end_of_month: false,
         };
         assert_eq!(
             add_interval(d(2027, 1, 31), one_month),
@@ -156,6 +170,7 @@ mod tests {
         let ninety = CalInterval {
             value: 90,
             unit: IntervalUnit::Days,
+            end_of_month: false,
         };
         assert_eq!(add_interval(d(2026, 1, 1), ninety), Some(d(2026, 4, 1)));
     }
@@ -224,6 +239,43 @@ mod tests {
         assert_eq!(
             due_status(Some(d(2020, 1, 1)), false, today),
             DueStatus::NotTracked
+        );
+    }
+
+    #[test]
+    fn end_of_month_moves_the_due_date_to_the_months_last_day() {
+        let eom = |value, unit| CalInterval {
+            value,
+            unit,
+            end_of_month: true,
+        };
+        let d = |y, m, day| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        assert_eq!(
+            add_interval(d(2026, 11, 20), eom(12, IntervalUnit::Months)),
+            Some(d(2027, 11, 30))
+        );
+        assert_eq!(
+            add_interval(d(2026, 11, 20), MONTHS_12),
+            Some(d(2027, 11, 20))
+        );
+        // February, leap and not
+        assert_eq!(
+            add_interval(d(2027, 2, 3), eom(12, IntervalUnit::Months)),
+            Some(d(2028, 2, 29))
+        );
+        assert_eq!(
+            add_interval(d(2026, 1, 31), eom(1, IntervalUnit::Months)),
+            Some(d(2026, 2, 28))
+        );
+        // December rolls into the next year correctly
+        assert_eq!(
+            add_interval(d(2026, 12, 5), eom(12, IntervalUnit::Months)),
+            Some(d(2027, 12, 31))
+        );
+        // days intervals land in a month too
+        assert_eq!(
+            add_interval(d(2026, 11, 20), eom(30, IntervalUnit::Days)),
+            Some(d(2026, 12, 31))
         );
     }
 }

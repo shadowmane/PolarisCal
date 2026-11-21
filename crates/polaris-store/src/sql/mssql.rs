@@ -271,11 +271,18 @@ pub(crate) fn read_time(row: &tiberius::Row, col: &str) -> Result<Option<DateTim
 /// SQL Server migrations: (version, description, script). Versions match the other
 /// backends' so "schema version" means the same thing everywhere. Scripts are split
 /// into batches on lines containing only `GO`.
-const MIGRATIONS: &[(i64, &str, &str)] = &[(
-    5,
-    "polariscal schema",
-    include_str!("../../migrations/mssql/0005_polariscal_schema.sql"),
-)];
+const MIGRATIONS: &[(i64, &str, &str)] = &[
+    (
+        5,
+        "polariscal schema",
+        include_str!("../../migrations/mssql/0005_polariscal_schema.sql"),
+    ),
+    (
+        6,
+        "interval end of month",
+        include_str!("../../migrations/mssql/0006_interval_end_of_month.sql"),
+    ),
+];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";
 

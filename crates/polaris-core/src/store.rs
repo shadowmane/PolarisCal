@@ -26,7 +26,8 @@ use crate::{Id, Result};
 ///   first/last/next dates are recomputed with [`crate::schedule::derive_dates`].
 /// * `expected_version` is checked against `row_version`; a mismatch returns
 ///   [`crate::Error::Conflict`] and changes nothing.
-/// * Nothing is ever hard-deleted; records are archived and accounts deactivated.
+/// * Nothing is hard-deleted except unused list entries ([`Store::delete_lookup`]);
+///   records are archived and accounts deactivated.
 ///
 /// Authorization (who may call what) is enforced by the caller, not the store.
 #[async_trait]
@@ -96,6 +97,10 @@ pub trait Store: Send + Sync {
         id: Id,
         input: LookupInput,
     ) -> Result<LookupItem>;
+    /// Permanently deletes a list entry that no item or calibration record (archived or
+    /// not) uses, and audits it. Fails with a conflict if it's in use; the caller can
+    /// make it inactive instead. The last remaining status can't be deleted.
+    async fn delete_lookup(&self, ctx: &WriteContext, kind: LookupKind, id: Id) -> Result<()>;
 
     // --- Instruments and Systems ---------------------------------------------
 

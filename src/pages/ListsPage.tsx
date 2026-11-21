@@ -95,6 +95,7 @@ function LookupTable({ kind }: { kind: LookupKind }) {
         isOpen={dialog.open}
         onOpenChange={(open) => setDialog((d) => ({ ...d, open }))}
         onSaved={reload}
+        onDeleted={reload}
       />
     </>
   );
@@ -107,7 +108,7 @@ export function ListsPage() {
     <>
       <PageHeader
         title="Lists"
-        description="The pick lists used across PolarisCal. Entries are deactivated rather than deleted, so existing records keep their values."
+        description="The pick lists used across PolarisCal. Entries nothing uses yet can be deleted; once in use, make them inactive instead so existing records keep their values."
       />
       <Tabs selectedKey={kind} onSelectionChange={(k) => setKind(k as LookupKind)} className="mb-4">
         <Tabs.ListContainer>

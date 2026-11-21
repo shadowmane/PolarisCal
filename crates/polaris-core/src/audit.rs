@@ -171,7 +171,8 @@ fn interval(i: &Option<CalInterval>) -> Option<String> {
             (IntervalUnit::Days, 1) => "day",
             (IntervalUnit::Days, _) => "days",
         };
-        format!("{} {unit}", i.value)
+        let eom = if i.end_of_month { ", end of month" } else { "" };
+        format!("{} {unit}{eom}", i.value)
     })
 }
 
@@ -286,6 +287,19 @@ pub fn created(after: &Snapshot) -> Vec<FieldChange> {
         .collect()
 }
 
+/// For a deleted record: every field it had, so the audit trail keeps what was removed.
+pub fn deleted(before: &Snapshot) -> Vec<FieldChange> {
+    before
+        .iter()
+        .filter(|(_, v)| v.is_some())
+        .map(|(field, v)| FieldChange {
+            field: (*field).to_string(),
+            old: v.clone(),
+            new: None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +366,7 @@ mod tests {
         let one = Some(CalInterval {
             value: 1,
             unit: IntervalUnit::Months,
+            end_of_month: false,
         });
         assert_eq!(interval(&one).as_deref(), Some("1 month"));
     }

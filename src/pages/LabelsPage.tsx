@@ -201,9 +201,11 @@ export function LabelsPage() {
                           onChange={(on) => toggle(l.assetId, on)}
                           aria-label={`Print a label for ${l.tag}`}
                         >
-                          <Checkbox.Control>
-                            <Checkbox.Indicator />
-                          </Checkbox.Control>
+                          <Checkbox.Content className="cursor-pointer">
+                            <Checkbox.Control>
+                              <Checkbox.Indicator />
+                            </Checkbox.Control>
+                          </Checkbox.Content>
                         </Checkbox>
                         <span className="w-28 shrink-0 font-medium">{l.tag}</span>
                         <span className="min-w-0 flex-1 truncate text-muted">{l.description}</span>

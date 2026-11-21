@@ -117,6 +117,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("warranty_end_date", Date),
             ("cal_interval_value", Int),
             ("cal_interval_unit", Text),
+            ("cal_interval_end_of_month", Bool),
             ("in_service_date", Date),
             ("first_cal_date", Date),
             ("last_cal_date", Date),

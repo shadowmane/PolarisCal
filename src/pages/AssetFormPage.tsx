@@ -6,7 +6,9 @@ import type { AssetKind } from "../bindings/AssetKind";
 import type { IntervalUnit } from "../bindings/IntervalUnit";
 import { ErrorAlert, Loading, PageHeader } from "../components/common";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { LookupSelect } from "../components/LookupSelect";
 import {
+  CheckboxInput,
   DateInput,
   FormSection,
   NumberInput,
@@ -242,11 +244,12 @@ export function AssetFormPage() {
             className="md:col-span-2"
             placeholder="e.g. Digital multimeter"
           />
-          <SelectInput
+          <LookupSelect
+            kind="manufacturer"
             label="Manufacturer"
             value={form.manufacturer_id}
             onChange={(v) => set("manufacturer_id", v)}
-            options={lookupOptions(lookups.data, "manufacturer", form.manufacturer_id)}
+            lookups={lookups}
             error={errors.manufacturer_id}
           />
           <TextInput
@@ -272,25 +275,28 @@ export function AssetFormPage() {
             error={errors.status_id}
             isRequired
           />
-          <SelectInput
+          <LookupSelect
+            kind="location"
             label="Location"
             value={form.location_id}
             onChange={(v) => set("location_id", v)}
-            options={lookupOptions(lookups.data, "location", form.location_id)}
+            lookups={lookups}
             error={errors.location_id}
           />
-          <SelectInput
+          <LookupSelect
+            kind="department"
             label="Department"
             value={form.department_id}
             onChange={(v) => set("department_id", v)}
-            options={lookupOptions(lookups.data, "department", form.department_id)}
+            lookups={lookups}
             error={errors.department_id}
           />
-          <SelectInput
+          <LookupSelect
+            kind="owner"
             label="Owner"
             value={form.owner_id}
             onChange={(v) => set("owner_id", v)}
-            options={lookupOptions(lookups.data, "owner", form.owner_id)}
+            lookups={lookups}
             error={errors.owner_id}
           />
         </FormSection>
@@ -299,25 +305,35 @@ export function AssetFormPage() {
           title="Calibration schedule"
           description="The next calibration date is calculated from the last calibration date plus the interval."
         >
-          <div className="grid grid-cols-[1fr_140px] items-start gap-3">
-            <NumberInput
-              label="Calibration interval"
-              value={form.interval_value}
-              onChange={(v) => set("interval_value", v)}
-              minValue={1}
-              error={errors.cal_interval}
-              description="Leave empty if the item has no fixed cycle."
-            />
-            <SelectInput<IntervalUnit>
-              label="Unit"
-              value={form.interval_unit}
-              onChange={(v) => v && set("interval_unit", v)}
-              options={[
-                { id: "months", label: "Months" },
-                { id: "days", label: "Days" },
-              ]}
-              isRequired
-              allowEmpty={false}
+          {/* The End of month box belongs directly under the interval, in the same column. */}
+          <div className="flex flex-col gap-3">
+            <div className="grid grid-cols-[1fr_140px] items-start gap-3">
+              <NumberInput
+                label="Calibration interval"
+                value={form.interval_value}
+                onChange={(v) => set("interval_value", v)}
+                minValue={1}
+                error={errors.cal_interval}
+                description="Leave empty if the item has no fixed cycle."
+              />
+              <SelectInput<IntervalUnit>
+                label="Unit"
+                value={form.interval_unit}
+                onChange={(v) => v && set("interval_unit", v)}
+                options={[
+                  { id: "months", label: "Months" },
+                  { id: "days", label: "Days" },
+                ]}
+                isRequired
+                allowEmpty={false}
+              />
+            </div>
+            <CheckboxInput
+              label="End of month"
+              description="Due on the last day of the month the interval lands in: calibrated Nov 20, 2026 with 12 months is due Nov 30, 2027."
+              isSelected={form.interval_end_of_month}
+              onChange={(v) => set("interval_end_of_month", v)}
+              isDisabled={form.interval_value == null}
             />
           </div>
           <DateInput

@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Chip, Table, toast } from "@heroui/react";
-import { ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Paperclip, Pencil, Plus, Printer } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Paperclip, Pencil, Plus, Printer } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { Asset } from "../bindings/Asset";
@@ -311,10 +311,18 @@ export function AssetDetailPage() {
               <Pencil className="size-4" /> Edit
             </Button>
             <Button
-              variant={asset.is_archived ? "secondary" : "ghost"}
+              variant={asset.is_archived ? "secondary" : "danger-soft"}
               onPress={() => setConfirmArchive(true)}
             >
-              {asset.is_archived ? "Restore" : "Archive"}
+              {asset.is_archived ? (
+                <>
+                  <ArchiveRestore className="size-4" /> Restore
+                </>
+              ) : (
+                <>
+                  <Archive className="size-4" /> Archive
+                </>
+              )}
             </Button>
           </div>
         </header>

@@ -4,4 +4,9 @@ import type { IntervalUnit } from "./IntervalUnit";
 /**
  * How often an item must be calibrated, e.g. 12 months.
  */
-export type CalInterval = { value: number, unit: IntervalUnit, };
+export type CalInterval = { value: number, unit: IntervalUnit, 
+/**
+ * Due on the last day of the month the interval lands in (12 months from
+ * 2026-11-20 is 2027-11-30 rather than 2027-11-20).
+ */
+end_of_month: boolean, };

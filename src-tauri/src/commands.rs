@@ -525,6 +525,13 @@ pub async fn update_lookup(
         .await?)
 }
 
+/// Deletes a list entry nothing uses yet (admins only).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn delete_lookup(state: State<'_, AppState>, kind: LookupKind, id: Id) -> CmdResult<()> {
+    let (store, me) = require(&state, Need::Admin).await?;
+    Ok(store.delete_lookup(&ctx(&me, None), kind, id).await?)
+}
+
 // ---------------------------------------------------------------------------
 // Instruments and Systems
 // ---------------------------------------------------------------------------

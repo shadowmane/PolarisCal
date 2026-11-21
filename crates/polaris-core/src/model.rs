@@ -124,6 +124,8 @@ text_enum!(
         Update => "update",
         Archive => "archive",
         Restore => "restore",
+        /// Permanently removed. Only allowed for list entries nothing uses yet.
+        Delete => "delete",
         SignIn => "sign_in",
         SignInFailed => "sign_in_failed",
         SignOut => "sign_out",
@@ -169,6 +171,10 @@ text_enum!(
 pub struct CalInterval {
     pub value: u32,
     pub unit: IntervalUnit,
+    /// Due on the last day of the month the interval lands in (12 months from
+    /// 2026-11-20 is 2027-11-30 rather than 2027-11-20).
+    #[serde(default)]
+    pub end_of_month: bool,
 }
 
 /// An Instrument or System, with the display names of its lookups joined in.
@@ -594,6 +600,7 @@ mod tests {
             cal_interval: Some(CalInterval {
                 value: 12,
                 unit: IntervalUnit::Months,
+                end_of_month: false,
             }),
             in_service_date: None,
             first_cal_date: None,
@@ -619,6 +626,7 @@ mod tests {
         i.cal_interval = Some(CalInterval {
             value: 0,
             unit: IntervalUnit::Days,
+            end_of_month: false,
         });
         let Err(Error::Validation(errors)) = i.normalize() else {
             panic!("expected validation error")

@@ -48,6 +48,7 @@ pub fn run() {
             commands::list_lookups,
             commands::create_lookup,
             commands::update_lookup,
+            commands::delete_lookup,
             commands::list_assets,
             commands::get_asset,
             commands::create_asset,

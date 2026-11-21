@@ -45,7 +45,7 @@ These were agreed on before development started (2026-11-20).
 | Databases | Local SQLite file, **or** remote PostgreSQL, Microsoft SQL Server, or MySQL/MariaDB. |
 | Users | Multi-user with logins and roles stored in the database. |
 | Certificates | Files stored on a configured shared folder/UNC path; the database stores the path. |
-| Change history | Full audit trail: who, when, why, old value, new value. Nothing is hard-deleted. |
+| Change history | Full audit trail: who, when, why, old value, new value. Records are archived, never deleted; only list entries nothing uses yet can be deleted (audited). |
 | Hierarchy | A System contains Instruments. Each item keeps its own calibration schedule. |
 | Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists. |
 
@@ -64,7 +64,8 @@ All of these live in `polaris-core` so every backend applies them identically.
   * *last calibration* is the latest non-archived record's date. While an item has no records
     it is the manually entered value (`last_cal_date_entered`, for items migrated from an older
     system), which is stored separately so it comes back if every record is archived;
-  * *next calibration* is always last + interval and is never edited directly.
+  * *next calibration* is always last + interval and is never edited directly. With **End of month**
+    on, it moves to the last day of that month (12 months from Nov 20, 2026 is Nov 30, 2027).
 * **Due status**: an item whose status has *tracks due* switched off (Out of Service, Retired,
   Lost, Calibration Not Required) is *not tracked*. Otherwise it is *overdue*, *due soon*
   (within 30 days), *current*, or *no schedule*.
@@ -137,10 +138,10 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 5) | n/a (a file) |
-| PostgreSQL 12+ | sqlx | `migrations/postgres` (starts at 5) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
-| MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (starts at 5) | No. Use a database account. |
-| SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (starts at 5), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 6) | n/a (a file) |
+| PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
+| MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
+| SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
 
 The server schemas match SQLite's version 5, so a schema version means the same thing everywhere
 and future migrations share numbers. All store timestamps in UTC to the microsecond, the finest

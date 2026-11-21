@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Local, NaiveDate, SubsecRound, Utc};
 use polaris_core::audit::{
     Actor, AuditEntry, AuditFilter, FieldChange, NewAuditEntry, WriteContext, asset_snapshot,
-    attachment_snapshot, calibration_snapshot, created, diff, lookup_snapshot, user_snapshot,
+    attachment_snapshot, calibration_snapshot, created, deleted, diff, lookup_snapshot,
+    user_snapshot,
 };
 use polaris_core::auth::{
     NewUser, User, UserCredentials, UserUpdate, check_password_rules, hash_password,
@@ -248,11 +249,15 @@ async fn sqlite_pool(path: &Path, create: bool) -> Result<sqlx::SqlitePool> {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn interval_from(value: Option<i64>, unit: Option<String>) -> Result<Option<CalInterval>> {
+/// Reads an asset's interval from the `cal_interval_*` columns of `row`.
+fn interval_from(row: &Row) -> Result<Option<CalInterval>> {
+    let value: Option<i64> = row.get("cal_interval_value")?;
+    let unit: Option<String> = row.get("cal_interval_unit")?;
     match (value, unit) {
         (Some(v), Some(u)) => Ok(Some(CalInterval {
             value: u32::try_from(v).map_err(|_| Error::Database(format!("bad interval {v}")))?,
             unit: u.parse()?,
+            end_of_month: row.get("cal_interval_end_of_month")?,
         })),
         _ => Ok(None),
     }
@@ -313,7 +318,7 @@ macro_rules! asset_select {
                 a.department_id, d.name AS department_name,
                 a.owner_id, o.name AS owner_name,
                 a.status_id, s.name AS status_name, s.tracks_due AS status_tracks_due,
-                a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit,
+                a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit, a.cal_interval_end_of_month,
                 a.in_service_date, a.first_cal_date, a.last_cal_date, a.last_cal_date_entered, a.next_cal_date,
                 (SELECT COUNT(*) FROM assets c WHERE c.parent_id = a.id AND c.is_archived = FALSE) AS child_count,
                 a.notes, a.is_archived, a.row_version, a.created_at, a.updated_at
@@ -350,10 +355,7 @@ fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
         status_id: row.get("status_id")?,
         status_name: row.get("status_name")?,
         warranty_end_date: row.get("warranty_end_date")?,
-        cal_interval: interval_from(
-            row.get("cal_interval_value")?,
-            row.get("cal_interval_unit")?,
-        )?,
+        cal_interval: interval_from(row)?,
         in_service_date: row.get("in_service_date")?,
         first_cal_date: row.get("first_cal_date")?,
         last_cal_date: row.get("last_cal_date")?,
@@ -421,7 +423,8 @@ async fn check_hierarchy(conn: &mut Conn, self_id: Option<Id>, input: &AssetInpu
 async fn recompute_asset_dates(conn: &mut Conn, asset_id: Id) -> Result<()> {
     let row = conn
         .fetch_optional(
-            "SELECT first_cal_date, last_cal_date_entered, cal_interval_value, cal_interval_unit
+            "SELECT first_cal_date, last_cal_date_entered, cal_interval_value, cal_interval_unit,
+                    cal_interval_end_of_month
              FROM assets WHERE id = ?1",
             params![asset_id],
         )
@@ -445,10 +448,7 @@ async fn recompute_asset_dates(conn: &mut Conn, asset_id: Id) -> Result<()> {
         row.get("first_cal_date")?,
         row.get("last_cal_date_entered")?,
         &record_dates,
-        interval_from(
-            row.get("cal_interval_value")?,
-            row.get("cal_interval_unit")?,
-        )?,
+        interval_from(&row)?,
     );
 
     conn.execute(
@@ -513,7 +513,8 @@ async fn due_date_for(
 ) -> Result<Option<NaiveDate>> {
     let row = conn
         .fetch_optional(
-            "SELECT cal_interval_value, cal_interval_unit, is_archived FROM assets WHERE id = ?1",
+            "SELECT cal_interval_value, cal_interval_unit, cal_interval_end_of_month, is_archived
+             FROM assets WHERE id = ?1",
             params![asset_id],
         )
         .await?
@@ -524,10 +525,7 @@ async fn due_date_for(
             "The selected item is archived.",
         ));
     }
-    let interval = interval_from(
-        row.get("cal_interval_value")?,
-        row.get("cal_interval_unit")?,
-    )?;
+    let interval = interval_from(&row)?;
     Ok(interval.and_then(|i| add_interval(cal_date, i)))
 }
 
@@ -586,6 +584,18 @@ fn lookup_extra(kind: LookupKind, input: &LookupInput) -> Option<bool> {
         LookupKind::Provider => Some(input.is_internal.unwrap_or(false)),
         LookupKind::Status => Some(input.tracks_due.unwrap_or(true)),
         _ => None,
+    }
+}
+
+/// Where a list entry can be used: (table, column, what one row is called).
+fn lookup_usage(kind: LookupKind) -> (&'static str, &'static str, &'static str) {
+    match kind {
+        LookupKind::Location => ("assets", "location_id", "item"),
+        LookupKind::Department => ("assets", "department_id", "item"),
+        LookupKind::Owner => ("assets", "owner_id", "item"),
+        LookupKind::Manufacturer => ("assets", "manufacturer_id", "item"),
+        LookupKind::Status => ("assets", "status_id", "item"),
+        LookupKind::Provider => ("calibration_records", "provider_id", "calibration record"),
     }
 }
 
@@ -1300,6 +1310,55 @@ impl Store for SqlStore {
         Ok(after)
     }
 
+    async fn delete_lookup(&self, ctx: &WriteContext, kind: LookupKind, id: Id) -> Result<()> {
+        let (table, _) = lookup_table(kind);
+        let (used_table, used_column, noun) = lookup_usage(kind);
+        let mut tx = self.begin().await?;
+        let item = fetch_lookup(&mut tx, kind, id).await?;
+        let uses = tx
+            .scalar(
+                &format!("SELECT COUNT(*) AS n FROM {used_table} WHERE {used_column} = ?1"),
+                params![id],
+            )
+            .await?;
+        if uses > 0 {
+            let plural = if uses == 1 { "" } else { "s" };
+            return Err(Error::Conflict(format!(
+                "'{}' is used by {uses} {noun}{plural} (including archived ones), so it can't be deleted. Make it inactive instead.",
+                item.name
+            )));
+        }
+        if kind == LookupKind::Status
+            && tx
+                .scalar("SELECT COUNT(*) AS n FROM asset_statuses", params![])
+                .await?
+                <= 1
+        {
+            return Err(Error::Conflict(
+                "This is the only status, and every item needs one.".into(),
+            ));
+        }
+        tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])
+            .await
+            .map_err(|e| match write_err(e, String::new) {
+                // Something started using it between the check and the delete.
+                Error::Validation(_) => Error::Conflict(format!(
+                    "'{}' is in use, so it can't be deleted. Make it inactive instead.",
+                    item.name
+                )),
+                other => other,
+            })?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Delete, AuditEntity::Lookup)
+                .subject(id, lookup_label(&item))
+                .changes(deleted(&lookup_snapshot(&item))),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     // --- Instruments and Systems ---------------------------------------------
 
     async fn list_assets(&self, filter: &AssetFilter) -> Result<Vec<Asset>> {
@@ -1361,8 +1420,8 @@ impl Store for SqlStore {
                     location_id, department_id, owner_id, status_id, warranty_end_date,
                     cal_interval_value, cal_interval_unit, in_service_date,
                     first_cal_date, last_cal_date, next_cal_date, notes, created_at, updated_at,
-                    last_cal_date_entered)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, ?21)",
+                    last_cal_date_entered, cal_interval_end_of_month)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, ?21, ?22)",
                 params![
                     &input.asset_tag,
                     input.kind.as_str(),
@@ -1384,7 +1443,8 @@ impl Store for SqlStore {
                     derived.next_cal_date,
                     &input.notes,
                     now(),
-                    input.last_cal_date
+                    input.last_cal_date,
+                    input.cal_interval.is_some_and(|i| i.end_of_month)
                 ],
             )
             .await
@@ -1424,7 +1484,7 @@ impl Store for SqlStore {
                     owner_id = ?12, status_id = ?13, warranty_end_date = ?14,
                     cal_interval_value = ?15, cal_interval_unit = ?16, in_service_date = ?17,
                     first_cal_date = ?18, last_cal_date_entered = ?19, notes = ?20, updated_at = ?21,
-                    row_version = row_version + 1
+                    cal_interval_end_of_month = ?22, row_version = row_version + 1
                  WHERE id = ?1 AND row_version = ?2",
                 params![
                     id,
@@ -1447,7 +1507,8 @@ impl Store for SqlStore {
                     input.first_cal_date,
                     input.last_cal_date,
                     &input.notes,
-                    now()
+                    now(),
+                    input.cal_interval.is_some_and(|i| i.end_of_month)
                 ],
             )
             .await

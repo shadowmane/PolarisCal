@@ -109,6 +109,7 @@ export const api = {
     call<LookupItem>("create_lookup", { kind, input }),
   updateLookup: (kind: LookupKind, id: number, input: LookupInput) =>
     call<LookupItem>("update_lookup", { kind, id, input }),
+  deleteLookup: (kind: LookupKind, id: number) => call<void>("delete_lookup", { kind, id }),
 
   // Instruments and Systems
   listAssets: (filter: Partial<AssetFilter> = {}) =>

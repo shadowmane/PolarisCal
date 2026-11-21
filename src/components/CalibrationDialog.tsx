@@ -14,7 +14,8 @@ import {
   fieldErrors,
   formToCalibrationInput,
 } from "../lib/forms";
-import { lookupOptions, useLookups } from "../lib/lookups";
+import { useLookups } from "../lib/lookups";
+import { LookupSelect } from "./LookupSelect";
 import { useAsync } from "../lib/useAsync";
 import { AttachmentsPanel, PendingFiles } from "./Attachments";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -247,11 +248,12 @@ export function CalibrationDialog({
                     onChange={(v) => set("certificate_number", v)}
                     error={errors.certificate_number}
                   />
-                  <SelectInput
+                  <LookupSelect
+                    kind="provider"
                     label="Calibrated by"
                     value={form.provider_id}
                     onChange={(v) => set("provider_id", v)}
-                    options={lookupOptions(lookups.data, "provider", form.provider_id)}
+                    lookups={lookups}
                     error={errors.provider_id}
                     isRequired
                     placeholder={
