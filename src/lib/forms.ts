@@ -276,6 +276,7 @@ export function formToCalibrationInput(f: CalibrationForm, isExtension = false):
       condition_received: f.condition_received!,
       condition_returned: f.condition_returned!,
       notes: optionalText(f.notes),
+      new_status_id: null,
     },
   };
 }

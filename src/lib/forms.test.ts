@@ -77,6 +77,7 @@ describe("pickable", () => {
     tracks_due: null,
     counts_as_calibration: null,
     is_extension: null,
+    status_role: null,
   });
 
   it("offers active entries plus the current value even if inactive", () => {
@@ -130,6 +131,7 @@ describe("asset form", () => {
       department_name: null,
       owner_name: null,
       status_name: "Active",
+      status_role: null,
       last_cal_date: "2026-11-18",
       last_cal_date_entered: "2026-03-15",
       next_cal_date: null,

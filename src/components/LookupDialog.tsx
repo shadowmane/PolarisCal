@@ -142,9 +142,14 @@ export function LookupDialog({
                 {kind === "status" && (
                   <SwitchInput
                     label="Track due dates"
-                    description="Items in this status appear in overdue and due-soon tracking."
+                    description={
+                      item?.status_role
+                        ? "Built in: items away for calibration or repair are always tracked; retired items never are."
+                        : "Items in this status appear in overdue and due-soon tracking."
+                    }
                     isSelected={!!input.tracks_due}
                     onChange={(v) => set("tracks_due", v)}
+                    isDisabled={!!item?.status_role}
                   />
                 )}
                 <SwitchInput
@@ -156,7 +161,7 @@ export function LookupDialog({
               </form>
             </Modal.Body>
             <Modal.Footer>
-              {item && onDeleted && (
+              {item && onDeleted && !item.status_role && !item.is_extension && (
                 <Button variant="danger-soft" className="mr-auto" isDisabled={saving} onPress={() => setConfirmDelete(true)}>
                   <Trash2 className="size-4" /> Delete
                 </Button>

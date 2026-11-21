@@ -430,6 +430,7 @@ mod tests {
             owner_name: None,
             status_id: 1,
             status_name: "Active".into(),
+            status_role: None,
             warranty_end_date: None,
             cal_interval: interval,
             in_service_date: None,

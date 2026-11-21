@@ -1,10 +1,11 @@
-import { Alert, Button, ComboBox, FieldError, Input, Label, ListBox, Modal, toast } from "@heroui/react";
+import { Alert, AlertDialog, Button, ComboBox, FieldError, Input, Label, ListBox, Modal, toast } from "@heroui/react";
 import { today, getLocalTimeZone } from "@internationalized/date";
 import { useEffect, useState } from "react";
 import type { CalibratedBy } from "../bindings/CalibratedBy";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { ConditionReceived } from "../bindings/ConditionReceived";
 import type { ConditionReturned } from "../bindings/ConditionReturned";
+import type { StatusRole } from "../bindings/StatusRole";
 import { ApiError, api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { conditionReceivedMeta, conditionReturnedMeta, formatDate } from "../lib/format";
@@ -100,6 +101,7 @@ export function CalibrationDialog({
   const [formError, setFormError] = useState<ApiError>();
   const [saving, setSaving] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
+  const [askFailedAction, setAskFailedAction] = useState(false);
   const [reason, setReason] = useState("");
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
   const settings = useAsync(() => api.getSettings(), [isOpen]);
@@ -120,6 +122,7 @@ export function CalibrationDialog({
     setFormError(undefined);
     setReason("");
     setPendingFiles([]);
+    setAskFailedAction(false);
   }, [isOpen, record, asset]);
 
   // A new record starts as the first type that counts as a calibration (normally "Calibration").
@@ -151,19 +154,34 @@ export function CalibrationDialog({
     if (Object.keys(fields).length === 0 || err.fields.some((f) => !f.field)) setFormError(err);
   }
 
-  async function save() {
+  const statusWithRole = (role: StatusRole) => lookups.data?.status.find((s) => s.status_role === role);
+
+  /** `newStatus`: the built-in status to move the item to, chosen after a failed calibration. */
+  async function save(newStatus?: StatusRole) {
     setFormError(undefined);
     const converted = formToCalibrationInput(form, isExtension);
     if (!converted.ok) {
       setErrors(converted.errors);
       return;
     }
+    // A calibration that fails asks whether the item is going for repair or being retired
+    // (once: not again when editing a record that had already failed).
+    const countsAsCalibration =
+      lookups.data?.service_type.find((t) => t.id === form.service_type_id)?.counts_as_calibration === true;
+    const alreadyFailed = record?.counts_as_calibration && record.condition_returned === "fail";
+    if (countsAsCalibration && form.condition_returned === "fail" && !alreadyFailed && !newStatus) {
+      setAskFailedAction(true);
+      return;
+    }
+    const status = newStatus ? statusWithRole(newStatus) : undefined;
     setSaving(true);
     try {
+      const input = { ...converted.value, new_status_id: status?.id ?? null };
       const saved = record
-        ? await api.updateCalibration(record.id, record.row_version, converted.value, reason)
-        : await api.createCalibration(converted.value);
-      toast.success(record ? "Service record saved" : `Service recorded for ${saved.asset_tag}`);
+        ? await api.updateCalibration(record.id, record.row_version, input, reason)
+        : await api.createCalibration(input);
+      const moved = status ? `; ${saved.asset_tag} is now ${status.name}` : "";
+      toast.success(record ? `Service record saved${moved}` : `Service recorded for ${saved.asset_tag}${moved}`);
       if (!record && pendingFiles.length > 0) {
         try {
           await api.addAttachments({
@@ -443,6 +461,50 @@ export function CalibrationDialog({
           </Modal.Container>
         </Modal.Backdrop>
       </Modal>
+
+      <AlertDialog>
+        <AlertDialog.Backdrop isOpen={askFailedAction} onOpenChange={setAskFailedAction}>
+          <AlertDialog.Container size="md">
+            <AlertDialog.Dialog>
+              <AlertDialog.Header>
+                <AlertDialog.Icon status="danger" />
+                <AlertDialog.Heading>Calibration failed</AlertDialog.Heading>
+              </AlertDialog.Header>
+              <AlertDialog.Body>
+                <p className="text-sm text-muted">
+                  {fixedAsset ? `${fixedAsset.asset_tag} was` : "This item was"} returned as failed. Is it being
+                  sent for repair or retired? Its status changes to{" "}
+                  <strong>{statusWithRole("out_for_repair")?.name ?? "Out for Repair"}</strong> or{" "}
+                  <strong>{statusWithRole("retired")?.name ?? "Retired"}</strong>. Its last and next calibration
+                  dates stay as they are.
+                </p>
+              </AlertDialog.Body>
+              <AlertDialog.Footer>
+                <Button slot="close" variant="tertiary">
+                  Cancel
+                </Button>
+                <Button
+                  variant="danger-soft"
+                  onPress={() => {
+                    setAskFailedAction(false);
+                    void save("retired");
+                  }}
+                >
+                  Retire it
+                </Button>
+                <Button
+                  onPress={() => {
+                    setAskFailedAction(false);
+                    void save("out_for_repair");
+                  }}
+                >
+                  Send for repair
+                </Button>
+              </AlertDialog.Footer>
+            </AlertDialog.Dialog>
+          </AlertDialog.Container>
+        </AlertDialog.Backdrop>
+      </AlertDialog>
 
       <ConfirmDialog
         isOpen={confirmArchive}

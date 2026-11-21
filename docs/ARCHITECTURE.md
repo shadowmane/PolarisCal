@@ -141,7 +141,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 9) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 10) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -229,6 +229,16 @@ Technician, filled with the user's name) and a length in days. The item's next c
 the extension's date plus those days, and the last calibration stays as it was. An extension never
 shortens the schedule, and the next calibration on or after its date ends it. While it lasts the
 item's status is **Calibration extended**; it is still counted and listed with the overdue items.
+
+### Failed calibrations and built-in statuses
+
+Three statuses are built in (a `builtin_role` column marks them, so they can be renamed but not
+deleted): **Out for Calibration** and **Out for Repair** always track due dates, so an item away
+for service still shows when it's overdue or due soon (the Dashboard gives it a second badge with
+its status), and **Retired** never does. A calibration returned as **Fail** doesn't move the item's
+last or next calibration date, since the item isn't fit for use. Saving one asks whether the item
+is being sent for repair or retired, and the record and the status change are saved together (the
+status change is audited as an edit of the item).
 
 ## Reports and labels
 

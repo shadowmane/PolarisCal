@@ -34,6 +34,7 @@ function asset(id: number, tag: string, over: Partial<Asset> = {}): Asset {
     owner_name: null,
     status_id: 1,
     status_name: "Active",
+    status_role: null,
     warranty_end_date: null,
     cal_interval: { value: 12, unit: "months", end_of_month: false },
     in_service_date: null,

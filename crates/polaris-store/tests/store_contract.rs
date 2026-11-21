@@ -209,6 +209,7 @@ fn cal(asset_id: i64, provider_id: i64, date: NaiveDate) -> CalibrationInput {
         condition_received: ConditionReceived::OutOfTolerance,
         condition_returned: ConditionReturned::Pass,
         notes: None,
+        new_status_id: None,
     }
 }
 
@@ -217,7 +218,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 9);
+    assert_eq!(info.schema_version, 10);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -233,10 +234,25 @@ async fn fresh_database_is_migrated_and_seeded() {
             "Calibration Not Required",
             "Lost / Missing",
             "Out for Calibration",
+            "Out for Repair",
             "Out of Service",
             "Retired"
         ]
     );
+    let role = |name: &str| {
+        statuses
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap()
+            .status_role
+    };
+    assert_eq!(role("Active"), None);
+    assert_eq!(
+        role("Out for Calibration"),
+        Some(StatusRole::OutForCalibration)
+    );
+    assert_eq!(role("Out for Repair"), Some(StatusRole::OutForRepair));
+    assert_eq!(role("Retired"), Some(StatusRole::Retired));
     assert_eq!(statuses[0].tracks_due, Some(true));
     assert_eq!(statuses[2].tracks_due, Some(false));
     assert_eq!(statuses[0].is_internal, None);
@@ -415,20 +431,22 @@ async fn unused_list_entries_can_be_deleted_but_used_ones_cannot() {
         "{err}"
     );
 
-    // Unused statuses can go, but never the last one.
-    let active = status_id(s, "Active").await;
+    // Unused statuses can go, except the built-in ones. (Active is in use above.)
     for status in s.list_lookups(LookupKind::Status, true).await.unwrap() {
-        if status.id != active {
-            s.delete_lookup(&ctx(), LookupKind::Status, status.id)
-                .await
-                .unwrap();
+        let result = s.delete_lookup(&ctx(), LookupKind::Status, status.id).await;
+        if status.status_role.is_some() || status.name == "Active" {
+            assert!(matches!(result, Err(Error::Conflict(_))), "{}", status.name);
+        } else {
+            result.unwrap();
         }
     }
-    let err = s
-        .delete_lookup(&ctx(), LookupKind::Status, active)
-        .await
-        .unwrap_err();
-    assert!(matches!(err, Error::Conflict(_)), "{err}");
+    assert_eq!(
+        s.list_lookups(LookupKind::Status, true)
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
 }
 
 #[tokio::test]
@@ -914,6 +932,106 @@ async fn calibration_extensions_authorize_use_past_the_due_date() {
         .unwrap();
     assert_eq!(renamed.counts_as_calibration, Some(false));
     assert_eq!(renamed.is_extension, Some(true));
+}
+
+/// The built-in status with this role.
+async fn status_with_role(store: &dyn Store, role: StatusRole) -> LookupItem {
+    store
+        .list_lookups(LookupKind::Status, true)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|s| s.status_role == Some(role))
+        .expect("built-in status")
+}
+
+#[tokio::test]
+async fn failed_calibrations_keep_the_schedule_and_can_change_status() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let repair = status_with_role(s, StatusRole::OutForRepair).await;
+    let retired = status_with_role(s, StatusRole::Retired).await;
+    assert_eq!(repair.tracks_due, Some(true));
+    assert_eq!(retired.tracks_due, Some(false));
+
+    let asset = s
+        .create_asset(
+            &ctx(),
+            asset_input(s, "FAIL-1", AssetKind::Instrument).await,
+        )
+        .await
+        .unwrap();
+    let today = Local::now().date_naive();
+    let earlier = today - Days::new(400);
+    s.create_calibration(&ctx(), cal(asset.id, vendor, earlier))
+        .await
+        .unwrap();
+    let before = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(before.due_status, DueStatus::Overdue);
+
+    // Failed today, sent for repair: the dates stay; the status changes in the same save.
+    let mut failed = cal(asset.id, vendor, today);
+    failed.condition_returned = ConditionReturned::Fail;
+    failed.new_status_id = Some(repair.id);
+    let record = s.create_calibration(&ctx(), failed.clone()).await.unwrap();
+    assert_eq!(record.next_due_date, None);
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.last_cal_date, before.last_cal_date);
+    assert_eq!(a.next_cal_date, before.next_cal_date);
+    assert_eq!(a.status_id, repair.id);
+    assert_eq!(a.status_role, Some(StatusRole::OutForRepair));
+    // Away for repair, but still overdue.
+    assert_eq!(a.due_status, DueStatus::Overdue);
+    let audit = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(asset.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        audit.iter().any(|e| e.entity == AuditEntity::Asset
+            && e.action == AuditAction::Update
+            && e.changes.iter().any(|c| c.field == "Status")),
+        "status change audited"
+    );
+
+    // Passing after the repair renews the schedule as usual.
+    s.create_calibration(&ctx(), cal(asset.id, vendor, today))
+        .await
+        .unwrap();
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.last_cal_date, Some(today));
+    assert_eq!(a.due_status, DueStatus::Current);
+
+    // Retiring takes the item out of due tracking.
+    let mut retire = failed.clone();
+    retire.new_status_id = Some(retired.id);
+    s.create_calibration(&ctx(), retire).await.unwrap();
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.status_role, Some(StatusRole::Retired));
+    assert_eq!(a.due_status, DueStatus::NotTracked);
+    assert_eq!(a.last_cal_date, Some(today));
+
+    // A status that doesn't exist is refused, and nothing is saved.
+    let mut bad = failed;
+    bad.new_status_id = Some(9_999);
+    let err = s.create_calibration(&ctx(), bad).await.unwrap_err();
+    assert!(
+        matches!(err, Error::Validation(ref e) if e[0].field == "new_status_id"),
+        "{err}"
+    );
+
+    // Built-in statuses keep their due tracking whatever an edit says.
+    let mut edit = lookup("Away for Repair");
+    edit.tracks_due = Some(false);
+    let renamed = s
+        .update_lookup(&ctx(), LookupKind::Status, repair.id, edit)
+        .await
+        .unwrap();
+    assert_eq!(renamed.name, "Away for Repair");
+    assert_eq!(renamed.tracks_due, Some(true));
 }
 
 #[tokio::test]

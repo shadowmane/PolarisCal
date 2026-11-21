@@ -69,6 +69,23 @@ text_enum!(
 );
 
 text_enum!(
+    /// Marks a built-in status the app relies on, so it keeps working if renamed.
+    StatusRole {
+        OutForCalibration => "out_for_calibration",
+        /// Where an item goes after failing calibration, unless it's retired.
+        OutForRepair => "out_for_repair",
+        Retired => "retired",
+    }
+);
+
+impl StatusRole {
+    /// Whether items in this status are away being serviced.
+    pub fn is_out_for_service(self) -> bool {
+        matches!(self, Self::OutForCalibration | Self::OutForRepair)
+    }
+}
+
+text_enum!(
     /// Where an item stands against its calibration schedule.
     DueStatus {
         /// The item's status (e.g. Out of Service) excludes it from due tracking.
@@ -213,6 +230,8 @@ pub struct Asset {
     pub owner_name: Option<String>,
     pub status_id: Id,
     pub status_name: String,
+    /// Set when the item's status is a built-in one (e.g. Out for Repair).
+    pub status_role: Option<StatusRole>,
     pub warranty_end_date: Option<NaiveDate>,
     pub cal_interval: Option<CalInterval>,
     pub in_service_date: Option<NaiveDate>,
@@ -397,6 +416,10 @@ pub struct CalibrationInput {
     pub condition_received: ConditionReceived,
     pub condition_returned: ConditionReturned,
     pub notes: Option<String>,
+    /// Also change the item's status, in the same save (e.g. to Out for Repair or
+    /// Retired after a failed calibration).
+    #[serde(default)]
+    pub new_status_id: Option<Id>,
 }
 
 impl CalibrationInput {
@@ -459,6 +482,8 @@ pub struct LookupItem {
     pub counts_as_calibration: Option<bool>,
     /// Service types only: the built-in Calibration Extension type.
     pub is_extension: Option<bool>,
+    /// Statuses only: set on the built-in statuses, which can't be deleted.
+    pub status_role: Option<StatusRole>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

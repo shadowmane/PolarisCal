@@ -19,4 +19,9 @@ calibrated_by_id: number | null,
 /**
  * Calibration extensions only: how many days the extension lasts (at least 1).
  */
-extension_days: number | null, technician: string | null, cost_cents: number | null, certificate_number: string | null, condition_received: ConditionReceived, condition_returned: ConditionReturned, notes: string | null, };
+extension_days: number | null, technician: string | null, cost_cents: number | null, certificate_number: string | null, condition_received: ConditionReceived, condition_returned: ConditionReturned, notes: string | null, 
+/**
+ * Also change the item's status, in the same save (e.g. to Out for Repair or
+ * Retired after a failed calibration).
+ */
+new_status_id: number | null, };

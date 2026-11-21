@@ -16,7 +16,8 @@ use polaris_core::auth::{
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, AssetKind, Attachment, AttachmentFilter,
     AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationFilter, CalibrationInput,
-    CalibrationRecord, LookupInput, LookupItem, LookupKind, NewAttachment, Role, StoreInfo,
+    CalibrationRecord, ConditionReturned, LookupInput, LookupItem, LookupKind, NewAttachment, Role,
+    StatusRole, StoreInfo,
 };
 use polaris_core::schedule::{
     add_interval, apply_extension, derive_dates, due_status_with_extension,
@@ -320,6 +321,7 @@ macro_rules! asset_select {
                 a.department_id, d.name AS department_name,
                 a.owner_id, o.name AS owner_name,
                 a.status_id, s.name AS status_name, s.tracks_due AS status_tracks_due,
+                s.builtin_role AS status_role,
                 a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit, a.cal_interval_end_of_month,
                 a.in_service_date, a.first_cal_date, a.last_cal_date, a.last_cal_date_entered, a.next_cal_date,
                 a.cal_extended,
@@ -333,6 +335,12 @@ macro_rules! asset_select {
          LEFT JOIN owners o        ON o.id = a.owner_id
          JOIN asset_statuses s     ON s.id = a.status_id"
     };
+}
+
+fn role_from(row: &Row) -> Result<Option<StatusRole>> {
+    row.get::<Option<String>>("status_role")?
+        .map(|r| r.parse())
+        .transpose()
 }
 
 fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
@@ -357,6 +365,7 @@ fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
         owner_name: row.get("owner_name")?,
         status_id: row.get("status_id")?,
         status_name: row.get("status_name")?,
+        status_role: role_from(row)?,
         warranty_end_date: row.get("warranty_end_date")?,
         cal_interval: interval_from(row)?,
         in_service_date: row.get("in_service_date")?,
@@ -447,7 +456,8 @@ async fn recompute_asset_dates(conn: &mut Conn, asset_id: Id) -> Result<()> {
         .fetch_all(
             "SELECT r.cal_date FROM calibration_records r
              JOIN service_types t ON t.id = r.service_type_id
-             WHERE r.asset_id = ?1 AND r.is_archived = FALSE AND t.counts_as_calibration = TRUE",
+             WHERE r.asset_id = ?1 AND r.is_archived = FALSE AND t.counts_as_calibration = TRUE
+               AND r.condition_returned <> 'fail'",
             params![asset_id],
         )
         .await?
@@ -623,7 +633,8 @@ async fn prepare_service(
             "Choose who did the work.",
         ));
     }
-    if !counts {
+    // A failed calibration doesn't renew anything: the item isn't fit for use.
+    if !counts || input.condition_returned == ConditionReturned::Fail {
         return Ok(None);
     }
     let interval = interval_from(&row)?;
@@ -665,10 +676,16 @@ fn lookup_select(kind: LookupKind) -> String {
     } else {
         ("NULL", "NULL")
     };
+    let role = if kind == LookupKind::Status {
+        "builtin_role"
+    } else {
+        "NULL"
+    };
     format!(
         "SELECT id, name, description, is_active, sort_order,
                 {internal} AS is_internal, {tracks} AS tracks_due,
-                {counts} AS counts_as_calibration, {extension} AS is_extension
+                {counts} AS counts_as_calibration, {extension} AS is_extension,
+                {role} AS status_role
          FROM {table}"
     )
 }
@@ -685,6 +702,7 @@ fn map_lookup(row: &Row, kind: LookupKind) -> Result<LookupItem> {
         tracks_due: row.get("tracks_due")?,
         counts_as_calibration: row.get("counts_as_calibration")?,
         is_extension: row.get("is_extension")?,
+        status_role: role_from(row)?,
     })
 }
 
@@ -714,6 +732,48 @@ fn lookup_usage(kind: LookupKind) -> &'static [Usage] {
         LookupKind::Provider => &[("calibration_records", "provider_id", "service record")],
         LookupKind::ServiceType => &[("calibration_records", "service_type_id", "service record")],
     }
+}
+
+/// Changes an item's status as part of saving a service record (e.g. to Out for Repair
+/// after a failed calibration), audited as an edit of the item. `before` is the item
+/// as it was before the save; nothing happens if the status is already `status_id`.
+async fn set_status_with_service(
+    conn: &mut Conn,
+    ctx: &WriteContext,
+    before: &Asset,
+    status_id: Option<Id>,
+) -> Result<()> {
+    let Some(status_id) = status_id.filter(|s| *s != before.status_id) else {
+        return Ok(());
+    };
+    if conn
+        .fetch_optional(
+            "SELECT 1 AS n FROM asset_statuses WHERE id = ?1",
+            params![status_id],
+        )
+        .await?
+        .is_none()
+    {
+        return Err(Error::validation(
+            "new_status_id",
+            "The selected status does not exist.",
+        ));
+    }
+    conn.execute(
+        "UPDATE assets SET status_id = ?2, updated_at = ?3, row_version = row_version + 1
+         WHERE id = ?1",
+        params![before.id, status_id, now()],
+    )
+    .await?;
+    let after = fetch_asset(conn, before.id).await?;
+    write_audit(
+        conn,
+        NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Asset)
+            .subject(before.id, &after.asset_tag)
+            .asset(before.id)
+            .changes(diff(&asset_snapshot(before), &asset_snapshot(&after))),
+    )
+    .await
 }
 
 /// The SQL columns for who calibrated: (provider_id, manufacturer_id).
@@ -1423,6 +1483,10 @@ impl Store for SqlStore {
         if before.is_extension == Some(true) {
             input.counts_as_calibration = Some(false);
         }
+        // Items away for service still show when overdue; retired ones never do.
+        if let Some(role) = before.status_role {
+            input.tracks_due = Some(role.is_out_for_service());
+        }
         let extra = lookup_extra(kind, &input);
         let mut values = params![
             id,
@@ -1471,6 +1535,12 @@ impl Store for SqlStore {
         if item.is_extension == Some(true) {
             return Err(Error::Conflict(format!(
                 "'{}' is built in and can't be deleted. Make it inactive if you don't use extensions.",
+                item.name
+            )));
+        }
+        if item.status_role.is_some() {
+            return Err(Error::Conflict(format!(
+                "'{}' is built in and can't be deleted. You can rename it.",
                 item.name
             )));
         }
@@ -1976,6 +2046,7 @@ impl Store for SqlStore {
         input.normalize(today())?;
         let mut tx = self.begin().await?;
         let next_due = prepare_service(&mut tx, &mut input).await?;
+        let asset_before = fetch_asset(&mut tx, input.asset_id).await?;
 
         let id = tx
             .insert(
@@ -2014,6 +2085,7 @@ impl Store for SqlStore {
                 .changes(created(&calibration_snapshot(&record))),
         )
         .await?;
+        set_status_with_service(&mut tx, ctx, &asset_before, input.new_status_id).await?;
         tx.commit().await?;
         Ok(record)
     }
@@ -2035,6 +2107,7 @@ impl Store for SqlStore {
             ));
         }
         let next_due = prepare_service(&mut tx, &mut input).await?;
+        let asset_before = fetch_asset(&mut tx, input.asset_id).await?;
 
         let changed = tx
             .execute(
@@ -2083,6 +2156,7 @@ impl Store for SqlStore {
                 )),
         )
         .await?;
+        set_status_with_service(&mut tx, ctx, &asset_before, input.new_status_id).await?;
         tx.commit().await?;
         Ok(after)
     }

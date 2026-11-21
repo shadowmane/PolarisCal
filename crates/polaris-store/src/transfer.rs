@@ -25,7 +25,9 @@ pub(crate) struct TableSpec {
 use ColType::{Bool, Date, Int, Text, Time};
 
 macro_rules! lookup_columns {
-    ($($extra:literal),*) => {
+    (@ty) => { Bool };
+    (@ty $ty:ident) => { $ty };
+    ($($extra:literal $(as $ty:ident)?),*) => {
         &[
             ("id", Int),
             ("name", Text),
@@ -34,7 +36,7 @@ macro_rules! lookup_columns {
             ("sort_order", Int),
             ("created_at", Time),
             ("updated_at", Time),
-            $(($extra, Bool),)*
+            $(($extra, lookup_columns!(@ty $($ty)?)),)*
         ]
     };
 }
@@ -76,7 +78,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
         name: "asset_statuses",
         label: "Statuses",
         identity: true,
-        columns: lookup_columns!("tracks_due"),
+        columns: lookup_columns!("tracks_due", "builtin_role" as Text),
     },
     TableSpec {
         name: "service_types",

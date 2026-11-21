@@ -142,6 +142,19 @@ function DueChip({ asset }: { asset: Asset }) {
   return <StatusChip color={meta.color}>{meta.label}</StatusChip>;
 }
 
+/** The due status, plus the item's status when it's away for calibration or repair. */
+function DueChips({ asset }: { asset: Asset }) {
+  const away =
+    asset.status_role === "out_for_calibration" ||
+    asset.status_role === "out_for_repair";
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <DueChip asset={asset} />
+      {away && <StatusChip color="accent">{asset.status_name}</StatusChip>}
+    </div>
+  );
+}
+
 function AttentionTable({
   assets,
   label,
@@ -174,7 +187,7 @@ function AttentionTable({
                 <Table.Cell>{a.location_name ?? EMPTY}</Table.Cell>
                 <Table.Cell>{formatDate(a.next_cal_date)}</Table.Cell>
                 <Table.Cell>
-                  <DueChip asset={a} />
+                  <DueChips asset={a} />
                 </Table.Cell>
               </Table.Row>
             )}
