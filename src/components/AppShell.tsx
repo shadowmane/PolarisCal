@@ -57,26 +57,30 @@ function UserPanel() {
   const { user, signOut } = useAuth();
   const [changing, setChanging] = useState(false);
   return (
-    <div className="flex items-center gap-2.5 px-2 pb-2">
-      <div className="grid size-8 shrink-0 place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent-soft-foreground">
-        {initials(user.display_name)}
+    <div className="flex flex-col gap-2 px-2 pb-1">
+      <div className="flex items-center gap-2.5">
+        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-accent-soft text-xs font-semibold text-accent-soft-foreground">
+          {initials(user.display_name)}
+        </div>
+        <div className="min-w-0 flex-1 leading-tight">
+          <div className="truncate text-sm font-medium">{user.display_name}</div>
+          <div className="truncate text-[11px] text-muted">{roleMeta[user.role].label}</div>
+        </div>
       </div>
-      <div className="min-w-0 flex-1 leading-tight">
-        <div className="truncate text-sm font-medium">{user.display_name}</div>
-        <div className="truncate text-[11px] text-muted">{roleMeta[user.role].label}</div>
+      <div className="grid grid-cols-2 gap-1">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="justify-start"
+          aria-label="Change password"
+          onPress={() => setChanging(true)}
+        >
+          <KeyRound className="size-4" /> Password
+        </Button>
+        <Button size="sm" variant="ghost" className="justify-start" onPress={() => void signOut()}>
+          <LogOut className="size-4" /> Sign out
+        </Button>
       </div>
-      <Tooltip delay={300}>
-        <Button isIconOnly size="sm" variant="ghost" aria-label="Change password" onPress={() => setChanging(true)}>
-          <KeyRound className="size-4" />
-        </Button>
-        <Tooltip.Content>Change password</Tooltip.Content>
-      </Tooltip>
-      <Tooltip delay={300}>
-        <Button isIconOnly size="sm" variant="ghost" aria-label="Sign out" onPress={() => void signOut()}>
-          <LogOut className="size-4" />
-        </Button>
-        <Tooltip.Content>Sign out</Tooltip.Content>
-      </Tooltip>
 
       <Modal>
         <Modal.Backdrop isOpen={changing} onOpenChange={setChanging}>
@@ -177,7 +181,7 @@ export function AppShell() {
   const noticeDismissed = useNoticeDismissed();
   const version = useAsync(() => getVersion(), []);
 
-  // One quiet check for a new version per launch, unless an admin turned checks off.
+  // The organization's currency, for every money display.
   useEffect(() => {
     api
       .getSettings()
@@ -188,7 +192,7 @@ export function AppShell() {
   return (
     <div className="flex h-full print:block print:h-auto">
       <nav className="flex w-64 shrink-0 flex-col border-r border-separator bg-surface px-3 py-4 print:hidden">
-        <div className="flex items-center gap-2.5 px-3 pb-5">
+        <div className="flex items-center gap-2.5 px-3 pb-4">
           <div className="grid size-8 place-items-center rounded-lg bg-accent text-accent-foreground">
             <Sparkle className="size-4.5" strokeWidth={2.5} />
           </div>
@@ -196,6 +200,25 @@ export function AppShell() {
             <div className="text-[15px] font-semibold tracking-tight">PolarisCal</div>
             <div className="text-[11px] text-muted">{version.data ? `Version ${version.data}` : " "}</div>
           </div>
+        </div>
+
+        {/* Where the data lives and the theme, at a glance. */}
+        <div className="mb-3 flex items-center gap-1 border-b border-separator pb-3">
+          <div className="min-w-0 flex-1">
+            <ConnectionStatus />
+          </div>
+          <Tooltip delay={300}>
+            <Button
+              isIconOnly
+              size="sm"
+              variant="ghost"
+              aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
+              onPress={() => setTheme(dark ? "light" : "dark")}
+            >
+              {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            </Button>
+            <Tooltip.Content>{dark ? "Light theme" : "Dark theme"}</Tooltip.Content>
+          </Tooltip>
         </div>
 
         <NavSection items={MAIN_NAV} />
@@ -216,20 +239,6 @@ export function AppShell() {
         )}
         <div className={`${update && noticeDismissed ? "" : "mt-auto "}border-t border-separator pt-3`}>
           <UserPanel />
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <ConnectionStatus />
-          </div>
-          <Button
-            isIconOnly
-            size="sm"
-            variant="ghost"
-            aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
-            onPress={() => setTheme(dark ? "light" : "dark")}
-          >
-            {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
-          </Button>
         </div>
       </nav>
 
