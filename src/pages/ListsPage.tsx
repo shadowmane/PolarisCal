@@ -17,8 +17,8 @@ function LookupTable({ kind }: { kind: LookupKind }) {
   const { can } = useAuth();
   const isAdmin = can("admin");
   const canAdd = can("edit_records");
-  // Alphabetical here; dropdowns elsewhere follow each entry's sort order.
-  const items = [...(data ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  // The store returns every list alphabetically.
+  const items = data ?? [];
   const byId = new Map(items.map((i) => [i.id, i]));
   const nextSortOrder = Math.max(0, ...(data ?? []).map((i) => i.sort_order)) + 10;
 

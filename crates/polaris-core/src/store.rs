@@ -79,6 +79,7 @@ pub trait Store: Send + Sync {
 
     // --- Pick lists ------------------------------------------------------------
 
+    /// A pick list in alphabetical order (case-insensitive).
     async fn list_lookups(
         &self,
         kind: LookupKind,

@@ -8,7 +8,7 @@ import { lookupKindMeta } from "../lib/format";
 import { emptyLookupInput, type FieldErrors, fieldErrors, lookupToInput } from "../lib/forms";
 import { Trash2 } from "lucide-react";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { NumberInput, SwitchInput, TextAreaInput, TextInput } from "./fields";
+import { SwitchInput, TextAreaInput, TextInput } from "./fields";
 
 /** Add or edit one entry in a pick list. */
 export function LookupDialog({
@@ -118,13 +118,6 @@ export function LookupDialog({
                   value={input.description ?? ""}
                   onChange={(v) => set("description", v)}
                   rows={2}
-                />
-                <NumberInput
-                  label="Sort order"
-                  value={input.sort_order}
-                  onChange={(v) => set("sort_order", Math.trunc(v ?? 0))}
-                  step={1}
-                  description="Lower numbers appear first in dropdowns."
                 />
                 {kind === "provider" && (
                   <SwitchInput

@@ -1240,7 +1240,7 @@ impl Store for SqlStore {
         include_inactive: bool,
     ) -> Result<Vec<LookupItem>> {
         let sql = format!(
-            "{} WHERE (?1 = TRUE OR is_active = TRUE) ORDER BY sort_order, LOWER(name), id",
+            "{} WHERE (?1 = TRUE OR is_active = TRUE) ORDER BY LOWER(name), id",
             lookup_select(kind)
         );
         self.conn()

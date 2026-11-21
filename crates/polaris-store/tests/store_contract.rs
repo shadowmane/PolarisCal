@@ -224,16 +224,33 @@ async fn fresh_database_is_migrated_and_seeded() {
         names,
         [
             "Active",
+            "Calibration Not Required",
+            "Lost / Missing",
             "Out for Calibration",
             "Out of Service",
-            "Calibration Not Required",
-            "Retired",
-            "Lost / Missing"
+            "Retired"
         ]
     );
     assert_eq!(statuses[0].tracks_due, Some(true));
     assert_eq!(statuses[2].tracks_due, Some(false));
     assert_eq!(statuses[0].is_internal, None);
+
+    // Lists come back alphabetically, ignoring case, whatever order they were added in.
+    for name in ["zeta lab", "Alpha Lab", "beta lab"] {
+        h.store
+            .create_lookup(&ctx(), LookupKind::Location, lookup(name))
+            .await
+            .unwrap();
+    }
+    let names: Vec<_> = h
+        .store
+        .list_lookups(LookupKind::Location, true)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|l| l.name)
+        .collect();
+    assert_eq!(names, ["Alpha Lab", "beta lab", "zeta lab"]);
 }
 
 #[tokio::test]
