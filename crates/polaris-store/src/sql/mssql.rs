@@ -302,6 +302,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "built-in statuses",
         include_str!("../../migrations/mssql/0010_builtin_statuses.sql"),
     ),
+    (
+        11,
+        "repairs",
+        include_str!("../../migrations/mssql/0011_repairs.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

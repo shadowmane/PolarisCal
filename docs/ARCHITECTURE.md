@@ -141,7 +141,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 10) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 11) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -239,6 +239,13 @@ its status), and **Retired** never does. A calibration returned as **Fail** does
 last or next calibration date, since the item isn't fit for use. Saving one asks whether the item
 is being sent for repair or retired, and the record and the status change are saved together (the
 status change is audited as an edit of the item).
+
+Service types marked **Repair** (a switch on the list; the upgrade sets it on types already named
+like a repair) close the loop: a repair returned as Fail retires the item, and one returned as Pass
+or Limited asks what status the item gets back, suggesting the status it had before the failure.
+An item remembers that status (`previous_status_id`) whenever a service record changes its status.
+A failed repair that also counts as a calibration retires the item without the repair-or-retire
+question.
 
 ## Reports and labels
 

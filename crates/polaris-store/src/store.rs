@@ -321,7 +321,7 @@ macro_rules! asset_select {
                 a.department_id, d.name AS department_name,
                 a.owner_id, o.name AS owner_name,
                 a.status_id, s.name AS status_name, s.tracks_due AS status_tracks_due,
-                s.builtin_role AS status_role,
+                s.builtin_role AS status_role, a.previous_status_id,
                 a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit, a.cal_interval_end_of_month,
                 a.in_service_date, a.first_cal_date, a.last_cal_date, a.last_cal_date_entered, a.next_cal_date,
                 a.cal_extended,
@@ -366,6 +366,7 @@ fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
         status_id: row.get("status_id")?,
         status_name: row.get("status_name")?,
         status_role: role_from(row)?,
+        previous_status_id: row.get("previous_status_id")?,
         warranty_end_date: row.get("warranty_end_date")?,
         cal_interval: interval_from(row)?,
         in_service_date: row.get("in_service_date")?,
@@ -519,7 +520,7 @@ macro_rules! calibration_select {
     () => {
         "SELECT r.id, r.asset_id, a.asset_tag, r.cal_date, r.provider_id, r.manufacturer_id,
                 r.service_type_id, t.name AS service_type_name, t.counts_as_calibration,
-                t.is_extension, r.extension_days,
+                t.is_extension, t.is_repair, r.extension_days,
                 COALESCE(p.name, m.name) AS calibrated_by_name,
                 r.technician, r.cost_cents, r.certificate_number,
                 r.condition_received, r.condition_returned, r.next_due_date, r.notes,
@@ -552,6 +553,7 @@ fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
         service_type_name: row.get("service_type_name")?,
         counts_as_calibration: row.get("counts_as_calibration")?,
         is_extension: row.get("is_extension")?,
+        is_repair: row.get("is_repair")?,
         extension_days: row.get("extension_days")?,
         calibrated_by,
         calibrated_by_id,
@@ -645,17 +647,17 @@ async fn prepare_service(
 // Lookups
 // ---------------------------------------------------------------------------
 
-/// Table name and the kind-specific extra column, if any. Both are fixed
-/// strings chosen by `kind`, never user input, so formatting them into SQL is safe.
-fn lookup_table(kind: LookupKind) -> (&'static str, Option<&'static str>) {
+/// Table name and the kind-specific editable flag columns. All are fixed strings chosen
+/// by `kind`, never user input, so formatting them into SQL is safe.
+fn lookup_table(kind: LookupKind) -> (&'static str, &'static [&'static str]) {
     match kind {
-        LookupKind::Location => ("locations", None),
-        LookupKind::Department => ("departments", None),
-        LookupKind::Owner => ("owners", None),
-        LookupKind::Manufacturer => ("manufacturers", None),
-        LookupKind::Provider => ("calibration_providers", Some("is_internal")),
-        LookupKind::Status => ("asset_statuses", Some("tracks_due")),
-        LookupKind::ServiceType => ("service_types", Some("counts_as_calibration")),
+        LookupKind::Location => ("locations", &[]),
+        LookupKind::Department => ("departments", &[]),
+        LookupKind::Owner => ("owners", &[]),
+        LookupKind::Manufacturer => ("manufacturers", &[]),
+        LookupKind::Provider => ("calibration_providers", &["is_internal"]),
+        LookupKind::Status => ("asset_statuses", &["tracks_due"]),
+        LookupKind::ServiceType => ("service_types", &["counts_as_calibration", "is_repair"]),
     }
 }
 
@@ -671,10 +673,10 @@ fn lookup_select(kind: LookupKind) -> String {
     } else {
         "NULL"
     };
-    let (counts, extension) = if kind == LookupKind::ServiceType {
-        ("counts_as_calibration", "is_extension")
+    let (counts, extension, repair) = if kind == LookupKind::ServiceType {
+        ("counts_as_calibration", "is_extension", "is_repair")
     } else {
-        ("NULL", "NULL")
+        ("NULL", "NULL", "NULL")
     };
     let role = if kind == LookupKind::Status {
         "builtin_role"
@@ -685,7 +687,7 @@ fn lookup_select(kind: LookupKind) -> String {
         "SELECT id, name, description, is_active, sort_order,
                 {internal} AS is_internal, {tracks} AS tracks_due,
                 {counts} AS counts_as_calibration, {extension} AS is_extension,
-                {role} AS status_role
+                {repair} AS is_repair, {role} AS status_role
          FROM {table}"
     )
 }
@@ -702,17 +704,21 @@ fn map_lookup(row: &Row, kind: LookupKind) -> Result<LookupItem> {
         tracks_due: row.get("tracks_due")?,
         counts_as_calibration: row.get("counts_as_calibration")?,
         is_extension: row.get("is_extension")?,
+        is_repair: row.get("is_repair")?,
         status_role: role_from(row)?,
     })
 }
 
-/// The value for a kind's extra column, applying its default when unset.
-fn lookup_extra(kind: LookupKind, input: &LookupInput) -> Option<bool> {
+/// The values for a kind's flag columns (in [`lookup_table`] order), applying defaults.
+fn lookup_extra(kind: LookupKind, input: &LookupInput) -> Vec<bool> {
     match kind {
-        LookupKind::Provider => Some(input.is_internal.unwrap_or(false)),
-        LookupKind::Status => Some(input.tracks_due.unwrap_or(true)),
-        LookupKind::ServiceType => Some(input.counts_as_calibration.unwrap_or(true)),
-        _ => None,
+        LookupKind::Provider => vec![input.is_internal.unwrap_or(false)],
+        LookupKind::Status => vec![input.tracks_due.unwrap_or(true)],
+        LookupKind::ServiceType => vec![
+            input.counts_as_calibration.unwrap_or(true),
+            input.is_repair.unwrap_or(false),
+        ],
+        _ => Vec::new(),
     }
 }
 
@@ -735,8 +741,9 @@ fn lookup_usage(kind: LookupKind) -> &'static [Usage] {
 }
 
 /// Changes an item's status as part of saving a service record (e.g. to Out for Repair
-/// after a failed calibration), audited as an edit of the item. `before` is the item
-/// as it was before the save; nothing happens if the status is already `status_id`.
+/// after a failed calibration), audited as an edit of the item, and remembers the old
+/// status as `previous_status_id`. `before` is the item as it was before the save;
+/// nothing happens if the status is already `status_id`.
 async fn set_status_with_service(
     conn: &mut Conn,
     ctx: &WriteContext,
@@ -760,9 +767,10 @@ async fn set_status_with_service(
         ));
     }
     conn.execute(
-        "UPDATE assets SET status_id = ?2, updated_at = ?3, row_version = row_version + 1
+        "UPDATE assets SET status_id = ?2, previous_status_id = ?3, updated_at = ?4,
+                           row_version = row_version + 1
          WHERE id = ?1",
-        params![before.id, status_id, now()],
+        params![before.id, status_id, before.status_id, now()],
     )
     .await?;
     let after = fetch_asset(conn, before.id).await?;
@@ -1423,18 +1431,16 @@ impl Store for SqlStore {
         mut input: LookupInput,
     ) -> Result<LookupItem> {
         input.normalize()?;
-        let (table, extra_col) = lookup_table(kind);
+        let (table, extra_cols) = lookup_table(kind);
         let extra = lookup_extra(kind, &input);
-        let sql = match extra_col {
-            Some(col) => format!(
-                "INSERT INTO {table} (name, description, is_active, sort_order, created_at, updated_at, {col})
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)"
-            ),
-            None => format!(
-                "INSERT INTO {table} (name, description, is_active, sort_order, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)"
-            ),
-        };
+        let cols: String = extra_cols.iter().map(|c| format!(", {c}")).collect();
+        let marks: String = (0..extra_cols.len())
+            .map(|i| format!(", ?{}", i + 6))
+            .collect();
+        let sql = format!(
+            "INSERT INTO {table} (name, description, is_active, sort_order, created_at, updated_at{cols})
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5{marks})"
+        );
         let mut values = params![
             &input.name,
             &input.description,
@@ -1442,9 +1448,7 @@ impl Store for SqlStore {
             input.sort_order,
             now()
         ];
-        if let Some(value) = extra {
-            values.push(Value::from(value));
-        }
+        values.extend(extra.into_iter().map(Value::from));
         let mut tx = self.begin().await?;
         let id = tx
             .insert(&sql, values)
@@ -1470,8 +1474,12 @@ impl Store for SqlStore {
         mut input: LookupInput,
     ) -> Result<LookupItem> {
         input.normalize()?;
-        let (table, extra_col) = lookup_table(kind);
-        let extra_set = extra_col.map(|c| format!(", {c} = ?7")).unwrap_or_default();
+        let (table, extra_cols) = lookup_table(kind);
+        let extra_set: String = extra_cols
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!(", {c} = ?{}", i + 7))
+            .collect();
         let sql = format!(
             "UPDATE {table}
              SET name = ?2, description = ?3, is_active = ?4, sort_order = ?5, updated_at = ?6{extra_set}
@@ -1482,6 +1490,7 @@ impl Store for SqlStore {
         // The built-in Calibration Extension type never counts as a calibration.
         if before.is_extension == Some(true) {
             input.counts_as_calibration = Some(false);
+            input.is_repair = Some(false);
         }
         // Items away for service still show when overdue; retired ones never do.
         if let Some(role) = before.status_role {
@@ -1496,9 +1505,7 @@ impl Store for SqlStore {
             input.sort_order,
             now()
         ];
-        if let Some(value) = extra {
-            values.push(Value::from(value));
-        }
+        values.extend(extra.into_iter().map(Value::from));
         tx.execute(&sql, values)
             .await
             .map_err(|e| write_err(e, || format!("'{}' is already in this list.", input.name)))?;
@@ -1574,6 +1581,13 @@ impl Store for SqlStore {
             } else {
                 "This is the only service type, and every service record needs one.".into()
             }));
+        }
+        if kind == LookupKind::Status {
+            tx.execute(
+                "UPDATE assets SET previous_status_id = NULL WHERE previous_status_id = ?1",
+                params![id],
+            )
+            .await?;
         }
         tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])
             .await

@@ -11,7 +11,12 @@ export type Asset = { id: number, asset_tag: string, kind: AssetKind, parent_id:
 /**
  * Set when the item's status is a built-in one (e.g. Out for Repair).
  */
-status_role: StatusRole | null, warranty_end_date: string | null, cal_interval: CalInterval | null, in_service_date: string | null, first_cal_date: string | null, 
+status_role: StatusRole | null, 
+/**
+ * The status the item had before a service record last changed it (e.g. before a
+ * failed calibration sent it to Out for Repair); offered back when a repair passes.
+ */
+previous_status_id: number | null, warranty_end_date: string | null, cal_interval: CalInterval | null, in_service_date: string | null, first_cal_date: string | null, 
 /**
  * Derived: the latest calibration record's date, or `last_cal_date_entered`
  * while the item has no (non-archived) records.

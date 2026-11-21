@@ -17,6 +17,10 @@ counts_as_calibration: boolean,
  */
 is_extension: boolean, 
 /**
+ * Whether this record's service type is a repair.
+ */
+is_repair: boolean, 
+/**
  * Extensions only: how many days from `cal_date` the extension lasts.
  */
 extension_days: number | null, 

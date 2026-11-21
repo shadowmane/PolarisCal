@@ -232,6 +232,9 @@ pub struct Asset {
     pub status_name: String,
     /// Set when the item's status is a built-in one (e.g. Out for Repair).
     pub status_role: Option<StatusRole>,
+    /// The status the item had before a service record last changed it (e.g. before a
+    /// failed calibration sent it to Out for Repair); offered back when a repair passes.
+    pub previous_status_id: Option<Id>,
     pub warranty_end_date: Option<NaiveDate>,
     pub cal_interval: Option<CalInterval>,
     pub in_service_date: Option<NaiveDate>,
@@ -370,6 +373,8 @@ pub struct CalibrationRecord {
     pub counts_as_calibration: bool,
     /// A calibration extension: authorizes use for `extension_days` past the due date.
     pub is_extension: bool,
+    /// Whether this record's service type is a repair.
+    pub is_repair: bool,
     /// Extensions only: how many days from `cal_date` the extension lasts.
     pub extension_days: Option<i32>,
     /// Whether a calibration provider or a manufacturer did the work (none for extensions).
@@ -482,6 +487,8 @@ pub struct LookupItem {
     pub counts_as_calibration: Option<bool>,
     /// Service types only: the built-in Calibration Extension type.
     pub is_extension: Option<bool>,
+    /// Service types only: whether records of this type are repairs.
+    pub is_repair: Option<bool>,
     /// Statuses only: set on the built-in statuses, which can't be deleted.
     pub status_role: Option<StatusRole>,
 }
@@ -497,6 +504,8 @@ pub struct LookupInput {
     pub tracks_due: Option<bool>,
     #[serde(default)]
     pub counts_as_calibration: Option<bool>,
+    #[serde(default)]
+    pub is_repair: Option<bool>,
 }
 
 impl LookupInput {

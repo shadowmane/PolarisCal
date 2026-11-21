@@ -18,12 +18,18 @@ import {
   fieldErrors,
   formToCalibrationInput,
 } from "../lib/forms";
-import { useLookups } from "../lib/lookups";
+import { lookupOptions, useLookups } from "../lib/lookups";
 import { LookupSelect } from "./LookupSelect";
 import { useAsync } from "../lib/useAsync";
 import { AttachmentsPanel, PendingFiles } from "./Attachments";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { DateInput, MoneyInput, NumberInput, SelectInput, TextAreaInput, TextInput } from "./fields";
+
+/** What saving a record with this outcome asks first. */
+type OutcomePrompt =
+  | { kind: "calibration_failed" }
+  | { kind: "repair_failed" }
+  | { kind: "repair_passed"; statusId: number | null; currentStatusId: number };
 
 export interface AssetRef {
   id: number;
@@ -101,7 +107,7 @@ export function CalibrationDialog({
   const [formError, setFormError] = useState<ApiError>();
   const [saving, setSaving] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
-  const [askFailedAction, setAskFailedAction] = useState(false);
+  const [prompt, setPrompt] = useState<OutcomePrompt | null>(null);
   const [reason, setReason] = useState("");
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
   const settings = useAsync(() => api.getSettings(), [isOpen]);
@@ -122,7 +128,7 @@ export function CalibrationDialog({
     setFormError(undefined);
     setReason("");
     setPendingFiles([]);
-    setAskFailedAction(false);
+    setPrompt(null);
   }, [isOpen, record, asset]);
 
   // A new record starts as the first type that counts as a calibration (normally "Calibration").
@@ -156,24 +162,55 @@ export function CalibrationDialog({
 
   const statusWithRole = (role: StatusRole) => lookups.data?.status.find((s) => s.status_role === role);
 
-  /** `newStatus`: the built-in status to move the item to, chosen after a failed calibration. */
-  async function save(newStatus?: StatusRole) {
+  /**
+   * Saves the record. The outcome can change the item's status, so some outcomes ask first
+   * and call back with `decision` (the status to move the item to, or null to leave it):
+   * a failed calibration asks repair or retire; a failed repair retires the item; a
+   * passed (or limited) repair asks which status it goes back to.
+   */
+  async function save(decision?: { statusId: number | null }) {
     setFormError(undefined);
     const converted = formToCalibrationInput(form, isExtension);
     if (!converted.ok) {
       setErrors(converted.errors);
       return;
     }
-    // A calibration that fails asks whether the item is going for repair or being retired
-    // (once: not again when editing a record that had already failed).
-    const countsAsCalibration =
-      lookups.data?.service_type.find((t) => t.id === form.service_type_id)?.counts_as_calibration === true;
-    const alreadyFailed = record?.counts_as_calibration && record.condition_returned === "fail";
-    if (countsAsCalibration && form.condition_returned === "fail" && !alreadyFailed && !newStatus) {
-      setAskFailedAction(true);
-      return;
+    const type = lookups.data?.service_type.find((t) => t.id === form.service_type_id);
+    const isRepair = type?.is_repair === true;
+    const countsAsCalibration = type?.counts_as_calibration === true;
+    const failed = form.condition_returned === "fail";
+    // Editing a record without changing what it means doesn't ask again.
+    const sameOutcome =
+      !!record &&
+      record.is_repair === isRepair &&
+      record.counts_as_calibration === countsAsCalibration &&
+      (record.condition_returned === "fail") === failed;
+    if (!decision && !sameOutcome) {
+      if (isRepair && failed) {
+        setPrompt({ kind: "repair_failed" });
+        return;
+      }
+      if (isRepair && form.asset_id != null) {
+        try {
+          const item = await api.getAsset(form.asset_id);
+          // Back to the status before the failure; without one, the first ordinary tracked status.
+          const fallback = lookups.data?.status.find((s) => s.is_active && s.tracks_due && !s.status_role);
+          setPrompt({
+            kind: "repair_passed",
+            statusId: item.previous_status_id ?? fallback?.id ?? item.status_id,
+            currentStatusId: item.status_id,
+          });
+        } catch (e) {
+          handleError(e);
+        }
+        return;
+      }
+      if (countsAsCalibration && failed) {
+        setPrompt({ kind: "calibration_failed" });
+        return;
+      }
     }
-    const status = newStatus ? statusWithRole(newStatus) : undefined;
+    const status = lookups.data?.status.find((s) => s.id === decision?.statusId);
     setSaving(true);
     try {
       const input = { ...converted.value, new_status_id: status?.id ?? null };
@@ -206,6 +243,12 @@ export function CalibrationDialog({
     }
   }
 
+  /** Closes the outcome prompt and saves with its answer. */
+  function decide(statusId: number | null) {
+    setPrompt(null);
+    void save({ statusId });
+  }
+
   /** Archives or restores; errors propagate so the confirm dialog can show them. */
   async function archive(why: string) {
     if (!record) return;
@@ -216,6 +259,7 @@ export function CalibrationDialog({
   }
 
   const fixedAsset = record ? { asset_tag: record.asset_tag } : asset;
+  const itemName = fixedAsset?.asset_tag ?? "This item";
   const title = record ? "Edit service record" : "Record service";
 
   return (
@@ -463,43 +507,72 @@ export function CalibrationDialog({
       </Modal>
 
       <AlertDialog>
-        <AlertDialog.Backdrop isOpen={askFailedAction} onOpenChange={setAskFailedAction}>
+        <AlertDialog.Backdrop isOpen={prompt != null} onOpenChange={(open) => !open && setPrompt(null)}>
           <AlertDialog.Container size="md">
             <AlertDialog.Dialog>
               <AlertDialog.Header>
-                <AlertDialog.Icon status="danger" />
-                <AlertDialog.Heading>Calibration failed</AlertDialog.Heading>
+                <AlertDialog.Icon status={prompt?.kind === "repair_passed" ? "success" : "danger"} />
+                <AlertDialog.Heading>
+                  {prompt?.kind === "calibration_failed"
+                    ? "Calibration failed"
+                    : prompt?.kind === "repair_failed"
+                      ? "Repair failed"
+                      : "Repair passed"}
+                </AlertDialog.Heading>
               </AlertDialog.Header>
               <AlertDialog.Body>
-                <p className="text-sm text-muted">
-                  {fixedAsset ? `${fixedAsset.asset_tag} was` : "This item was"} returned as failed. Is it being
-                  sent for repair or retired? Its status changes to{" "}
-                  <strong>{statusWithRole("out_for_repair")?.name ?? "Out for Repair"}</strong> or{" "}
-                  <strong>{statusWithRole("retired")?.name ?? "Retired"}</strong>. Its last and next calibration
-                  dates stay as they are.
-                </p>
+                {prompt?.kind === "calibration_failed" && (
+                  <p className="text-sm text-muted">
+                    {itemName} was returned as failed. Is it being sent for repair or retired? Its status changes to{" "}
+                    <strong>{statusWithRole("out_for_repair")?.name ?? "Out for Repair"}</strong> or{" "}
+                    <strong>{statusWithRole("retired")?.name ?? "Retired"}</strong>. Its last and next calibration
+                    dates stay as they are.
+                  </p>
+                )}
+                {prompt?.kind === "repair_failed" && (
+                  <p className="text-sm text-muted">
+                    {itemName} failed its repair, so it will be retired: its status changes to{" "}
+                    <strong>{statusWithRole("retired")?.name ?? "Retired"}</strong>.
+                  </p>
+                )}
+                {prompt?.kind === "repair_passed" && (
+                  <div className="flex flex-col gap-4">
+                    <p className="text-sm text-muted">
+                      {itemName} passed its repair. What status should it have now? The suggestion is the status it
+                      had before it failed.
+                    </p>
+                    <SelectInput
+                      label="Status"
+                      value={prompt.statusId}
+                      onChange={(v) => setPrompt({ ...prompt, statusId: v })}
+                      options={lookupOptions(lookups.data, "status", prompt.statusId)}
+                      isRequired
+                    />
+                  </div>
+                )}
               </AlertDialog.Body>
               <AlertDialog.Footer>
                 <Button slot="close" variant="tertiary">
                   Cancel
                 </Button>
-                <Button
-                  variant="danger-soft"
-                  onPress={() => {
-                    setAskFailedAction(false);
-                    void save("retired");
-                  }}
-                >
-                  Retire it
-                </Button>
-                <Button
-                  onPress={() => {
-                    setAskFailedAction(false);
-                    void save("out_for_repair");
-                  }}
-                >
-                  Send for repair
-                </Button>
+                {prompt?.kind === "calibration_failed" && (
+                  <>
+                    <Button variant="danger-soft" onPress={() => decide(statusWithRole("retired")?.id ?? null)}>
+                      Retire it
+                    </Button>
+                    <Button onPress={() => decide(statusWithRole("out_for_repair")?.id ?? null)}>Send for repair</Button>
+                  </>
+                )}
+                {prompt?.kind === "repair_failed" && (
+                  <Button variant="danger" onPress={() => decide(statusWithRole("retired")?.id ?? null)}>
+                    Retire it
+                  </Button>
+                )}
+                {prompt?.kind === "repair_passed" && (
+                  <Button isDisabled={prompt.statusId == null} onPress={() => decide(prompt.statusId)}>
+                    Save
+                  </Button>
+                )}
               </AlertDialog.Footer>
             </AlertDialog.Dialog>
           </AlertDialog.Container>

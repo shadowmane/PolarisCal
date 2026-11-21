@@ -84,7 +84,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
         name: "service_types",
         label: "Service types",
         identity: true,
-        columns: lookup_columns!("counts_as_calibration", "is_extension"),
+        columns: lookup_columns!("counts_as_calibration", "is_extension", "is_repair"),
     },
     TableSpec {
         name: "users",
@@ -132,6 +132,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("last_cal_date_entered", Date),
             ("next_cal_date", Date),
             ("cal_extended", Bool),
+            ("previous_status_id", Int),
             ("notes", Text),
             ("is_archived", Bool),
             ("row_version", Int),

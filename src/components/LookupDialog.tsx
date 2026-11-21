@@ -139,6 +139,14 @@ export function LookupDialog({
                     onChange={(v) => set("counts_as_calibration", v)}
                   />
                 )}
+                {kind === "service_type" && !item?.is_extension && (
+                  <SwitchInput
+                    label="Repair"
+                    description="A failed repair retires the item; a passed one asks what status to give it back."
+                    isSelected={!!input.is_repair}
+                    onChange={(v) => set("is_repair", v)}
+                  />
+                )}
                 {kind === "status" && (
                   <SwitchInput
                     label="Track due dates"

@@ -294,6 +294,7 @@ export function emptyLookupInput(kind: LookupKind, sortOrder = 0): LookupInput {
     is_internal: kind === "provider" ? false : null,
     tracks_due: kind === "status" ? true : null,
     counts_as_calibration: kind === "service_type" ? true : null,
+    is_repair: kind === "service_type" ? false : null,
   };
 }
 
@@ -306,5 +307,6 @@ export function lookupToInput(item: LookupItem): LookupInput {
     is_internal: item.is_internal,
     tracks_due: item.tracks_due,
     counts_as_calibration: item.counts_as_calibration,
+    is_repair: item.is_repair,
   };
 }

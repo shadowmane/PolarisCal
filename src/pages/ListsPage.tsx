@@ -84,7 +84,10 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                     )}
                     {kind === "status" && <Table.Cell>{item.tracks_due ? "Tracked" : "Excluded"}</Table.Cell>}
                     {kind === "service_type" && (
-                      <Table.Cell>{item.counts_as_calibration ? "Sets due dates" : "Doesn't affect due dates"}</Table.Cell>
+                      <Table.Cell>
+                        {item.counts_as_calibration ? "Sets due dates" : "Doesn't affect due dates"}
+                        {item.is_repair ? " · Repair" : ""}
+                      </Table.Cell>
                     )}
                     <Table.Cell>
                       <StatusChip color={item.is_active ? "success" : "default"}>

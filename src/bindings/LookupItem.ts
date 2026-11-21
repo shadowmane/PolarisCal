@@ -24,6 +24,10 @@ counts_as_calibration: boolean | null,
  */
 is_extension: boolean | null, 
 /**
+ * Service types only: whether records of this type are repairs.
+ */
+is_repair: boolean | null, 
+/**
  * Statuses only: set on the built-in statuses, which can't be deleted.
  */
 status_role: StatusRole | null, };

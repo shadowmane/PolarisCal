@@ -142,6 +142,7 @@ fn lookup(name: &str) -> LookupInput {
         is_internal: None,
         tracks_due: None,
         counts_as_calibration: None,
+        is_repair: None,
     }
 }
 
@@ -218,7 +219,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 10);
+    assert_eq!(info.schema_version, 11);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -772,14 +773,14 @@ async fn service_types_are_seeded_and_only_calibrations_set_due_dates() {
     let types = s.list_lookups(LookupKind::ServiceType, true).await.unwrap();
     let summary: Vec<_> = types
         .iter()
-        .map(|t| (t.id, t.name.as_str(), t.counts_as_calibration))
+        .map(|t| (t.id, t.name.as_str(), t.counts_as_calibration, t.is_repair))
         .collect();
     assert_eq!(
         summary,
         [
-            (CALIBRATION, "Calibration", Some(true)),
-            (3, "Calibration Extension", Some(false)),
-            (2, "Repair", Some(false))
+            (CALIBRATION, "Calibration", Some(true), Some(false)),
+            (3, "Calibration Extension", Some(false), Some(false)),
+            (2, "Repair", Some(false), Some(true))
         ]
     );
     let repair = types.iter().find(|t| t.name == "Repair").unwrap().id;
@@ -1032,6 +1033,88 @@ async fn failed_calibrations_keep_the_schedule_and_can_change_status() {
         .unwrap();
     assert_eq!(renamed.name, "Away for Repair");
     assert_eq!(renamed.tracks_due, Some(true));
+}
+
+#[tokio::test]
+async fn repairs_remember_the_status_before_a_failure() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let repair_status = status_with_role(s, StatusRole::OutForRepair).await;
+    let retired = status_with_role(s, StatusRole::Retired).await;
+    let types = s.list_lookups(LookupKind::ServiceType, true).await.unwrap();
+    let repair_type = types.iter().find(|t| t.is_repair == Some(true)).unwrap().id;
+
+    // Start from a status of the user's own, to show it's the one remembered.
+    let bench = s
+        .create_lookup(&ctx(), LookupKind::Status, lookup("On the Bench"))
+        .await
+        .unwrap();
+    let mut input = asset_input(s, "REP-1", AssetKind::Instrument).await;
+    input.status_id = bench.id;
+    let asset = s.create_asset(&ctx(), input).await.unwrap();
+    assert_eq!(asset.previous_status_id, None);
+
+    let today = Local::now().date_naive();
+    let mut failed = cal(asset.id, vendor, today);
+    failed.condition_returned = ConditionReturned::Fail;
+    failed.new_status_id = Some(repair_status.id);
+    s.create_calibration(&ctx(), failed).await.unwrap();
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.status_id, repair_status.id);
+    assert_eq!(a.previous_status_id, Some(bench.id));
+
+    // The repair passes; the status goes back to what it was.
+    let mut repaired = cal(asset.id, vendor, today);
+    repaired.service_type_id = repair_type;
+    repaired.new_status_id = a.previous_status_id;
+    let record = s
+        .create_calibration(&ctx(), repaired.clone())
+        .await
+        .unwrap();
+    assert!(record.is_repair);
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.status_id, bench.id);
+    assert_eq!(a.previous_status_id, Some(repair_status.id));
+
+    // A failed repair retires it.
+    repaired.condition_returned = ConditionReturned::Fail;
+    repaired.new_status_id = Some(retired.id);
+    s.create_calibration(&ctx(), repaired).await.unwrap();
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.status_role, Some(StatusRole::Retired));
+    assert_eq!(a.previous_status_id, Some(bench.id));
+
+    // Deleting a status that's only remembered (not in use) forgets it.
+    let mut edit = asset_input(s, "REP-1", AssetKind::Instrument).await;
+    edit.status_id = retired.id;
+    let a = s
+        .update_asset(&ctx(), a.id, a.row_version, edit)
+        .await
+        .unwrap();
+    assert_eq!(a.previous_status_id, Some(bench.id));
+    s.delete_lookup(&ctx(), LookupKind::Status, bench.id)
+        .await
+        .unwrap();
+    assert_eq!(s.get_asset(a.id).await.unwrap().previous_status_id, None);
+
+    // New service types can be repairs; the extension type never is.
+    let mut kind = lookup("Repair w/Calibration");
+    kind.is_repair = Some(true);
+    let created = s
+        .create_lookup(&ctx(), LookupKind::ServiceType, kind)
+        .await
+        .unwrap();
+    assert_eq!(created.is_repair, Some(true));
+    assert_eq!(created.counts_as_calibration, Some(true));
+    let ext = extension_type(s).await;
+    let mut edit = lookup("Calibration Extension");
+    edit.is_repair = Some(true);
+    let ext = s
+        .update_lookup(&ctx(), LookupKind::ServiceType, ext, edit)
+        .await
+        .unwrap();
+    assert_eq!(ext.is_repair, Some(false));
 }
 
 #[tokio::test]

@@ -247,6 +247,9 @@ pub fn lookup_snapshot(l: &LookupItem) -> Snapshot {
     if let Some(v) = l.counts_as_calibration {
         s.push(("Counts as a calibration", yes_no(v)));
     }
+    if let Some(v) = l.is_repair {
+        s.push(("Repair", yes_no(v)));
+    }
     s
 }
 
