@@ -92,6 +92,8 @@ text_enum!(
         Provider => "provider",
         /// Asset statuses such as Active or Out of Service.
         Status => "status",
+        /// What a service record is: Calibration, Repair, and so on.
+        ServiceType => "service_type",
     }
 );
 
@@ -330,6 +332,11 @@ pub struct CalibrationRecord {
     pub asset_id: Id,
     pub asset_tag: String,
     pub cal_date: NaiveDate,
+    /// What kind of service this was (Calibration, Repair, ...).
+    pub service_type_id: Id,
+    pub service_type_name: String,
+    /// Whether this record's service type counts as a calibration (and so sets due dates).
+    pub counts_as_calibration: bool,
     /// Whether a calibration provider or a manufacturer did the work.
     pub calibrated_by: CalibratedBy,
     /// The calibration provider's or manufacturer's id, per `calibrated_by`.
@@ -359,6 +366,8 @@ pub struct CalibrationRecord {
 pub struct CalibrationInput {
     pub asset_id: Id,
     pub cal_date: NaiveDate,
+    /// What kind of service this was (a service type list entry).
+    pub service_type_id: Id,
     /// Whether `calibrated_by_id` is a calibration provider or a manufacturer.
     pub calibrated_by: CalibratedBy,
     pub calibrated_by_id: Id,
@@ -425,6 +434,9 @@ pub struct LookupItem {
     pub is_internal: Option<bool>,
     /// Statuses only: whether items in this status appear in due/overdue tracking.
     pub tracks_due: Option<bool>,
+    /// Service types only: whether records of this type are calibrations, which set
+    /// an item's last calibration and next due dates.
+    pub counts_as_calibration: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -436,6 +448,8 @@ pub struct LookupInput {
     pub sort_order: i32,
     pub is_internal: Option<bool>,
     pub tracks_due: Option<bool>,
+    #[serde(default)]
+    pub counts_as_calibration: Option<bool>,
 }
 
 impl LookupInput {
@@ -518,6 +532,13 @@ pub struct AppSettings {
     /// Whether PolarisCal checks online for new versions. Turn off where IT deploys updates.
     #[serde(default = "default_true")]
     pub update_checks: bool,
+    /// Shown before amounts of money throughout the app, e.g. "$" or "€".
+    #[serde(default = "default_currency")]
+    pub currency_symbol: String,
+}
+
+fn default_currency() -> String {
+    AppSettings::DEFAULT_CURRENCY.into()
 }
 
 fn default_true() -> bool {
@@ -526,11 +547,19 @@ fn default_true() -> bool {
 
 impl AppSettings {
     pub const DEFAULT_IDLE_LOCK_MINUTES: u32 = 15;
+    pub const DEFAULT_CURRENCY: &str = "$";
 
     /// Trims the folder path (blank means unset) and checks the values. Whether the
     /// folder is reachable and writable is checked by the app, not here.
     pub fn normalize(&mut self) -> Result<()> {
         clean(&mut self.attachments_root);
+        self.currency_symbol = self.currency_symbol.trim().to_string();
+        if self.currency_symbol.is_empty() || self.currency_symbol.chars().count() > 5 {
+            return Err(Error::validation(
+                "currency_symbol",
+                "Choose a currency symbol of up to 5 characters.",
+            ));
+        }
         if !(1..=240).contains(&self.idle_lock_minutes) {
             return Err(Error::validation(
                 "idle_lock_minutes",
@@ -566,6 +595,7 @@ impl Default for AppSettings {
             idle_lock_minutes: Self::DEFAULT_IDLE_LOCK_MINUTES,
             attachments_root: None,
             update_checks: true,
+            currency_symbol: Self::DEFAULT_CURRENCY.into(),
         }
     }
 }
@@ -656,6 +686,7 @@ mod tests {
             idle_lock_minutes: 15,
             attachments_root: Some("   ".into()),
             update_checks: true,
+            currency_symbol: "$".into(),
         };
         s.normalize().unwrap();
         assert_eq!(s.attachments_root, None, "blank means unset");
@@ -665,6 +696,7 @@ mod tests {
                 idle_lock_minutes: 15,
                 attachments_root: Some(ok.into()),
                 update_checks: true,
+                currency_symbol: "$".into(),
             };
             assert!(s.normalize().is_ok(), "{ok}");
         }
@@ -673,6 +705,7 @@ mod tests {
                 idle_lock_minutes: 15,
                 attachments_root: Some(bad.into()),
                 update_checks: true,
+                currency_symbol: "$".into(),
             };
             assert!(
                 matches!(s.normalize(), Err(Error::Validation(ref e)) if e[0].field == "attachments_root"),
@@ -683,6 +716,7 @@ mod tests {
             idle_lock_minutes: 0,
             attachments_root: None,
             update_checks: true,
+            currency_symbol: "$".into(),
         };
         assert!(s.normalize().is_err());
     }

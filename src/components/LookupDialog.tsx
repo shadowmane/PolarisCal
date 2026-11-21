@@ -127,6 +127,14 @@ export function LookupDialog({
                     onChange={(v) => set("is_internal", v)}
                   />
                 )}
+                {kind === "service_type" && (
+                  <SwitchInput
+                    label="Counts as a calibration"
+                    description="Records of this type set the item's last calibration and next due date. Turn off for repairs and other work."
+                    isSelected={!!input.counts_as_calibration}
+                    onChange={(v) => set("counts_as_calibration", v)}
+                  />
+                )}
                 {kind === "status" && (
                   <SwitchInput
                     label="Track due dates"
@@ -173,7 +181,7 @@ export function LookupDialog({
             onDeleted();
           }}
         >
-          This removes it from the {meta.label.toLowerCase()} list for good. Entries that items or calibration
+          This removes it from the {meta.label.toLowerCase()} list for good. Entries that items or service
           records already use can't be deleted; make them inactive instead.
         </ConfirmDialog>
       )}

@@ -215,8 +215,9 @@ fn calibrated_by(r: &CalibrationRecord) -> String {
 
 pub fn calibration_snapshot(r: &CalibrationRecord) -> Snapshot {
     vec![
-        ("Date of calibration", Some(r.cal_date.to_string())),
-        ("Calibrated by", Some(calibrated_by(r))),
+        ("Date of service", Some(r.cal_date.to_string())),
+        ("Service type", Some(r.service_type_name.clone())),
+        ("Performed by", Some(calibrated_by(r))),
         ("Technician", r.technician.clone()),
         ("Cost", cents(r.cost_cents)),
         ("Certificate number", r.certificate_number.clone()),
@@ -240,6 +241,9 @@ pub fn lookup_snapshot(l: &LookupItem) -> Snapshot {
     }
     if let Some(v) = l.tracks_due {
         s.push(("Track due dates", yes_no(v)));
+    }
+    if let Some(v) = l.counts_as_calibration {
+        s.push(("Counts as a calibration", yes_no(v)));
     }
     s
 }

@@ -5,13 +5,12 @@ import { Link } from "react-router";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import { CalibrationDialog } from "../components/CalibrationDialog";
 import { ToggleSwitch } from "../components/fields";
-import { EmptyNote, ErrorAlert, Loading, PageHeader, StatusChip } from "../components/common";
+import { EmptyNote, ErrorAlert, Loading, Money, PageHeader, StatusChip } from "../components/common";
 import { api } from "../lib/api";
 import {
   conditionReceivedMeta,
   conditionReturnedMeta,
   EMPTY,
-  formatCents,
   formatDate,
 } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
@@ -31,12 +30,12 @@ export function CalibrationsPage() {
   return (
     <>
       <PageHeader
-        title="Calibration Records"
-        description="Every calibration performed, newest first. Saving a record updates the item's last and next calibration dates."
+        title="Service Records"
+        description="Every calibration, repair, and other service, newest first. Records whose type counts as a calibration update the item's last and next calibration dates."
         actions={
           canEdit && (
             <Button onPress={() => setDialog({ open: true })}>
-              <Plus className="size-4" /> Record calibration
+              <Plus className="size-4" /> Record service
             </Button>
           )
         }
@@ -52,7 +51,7 @@ export function CalibrationsPage() {
         <Table>
           <Table.ScrollContainer>
             <Table.Content
-              aria-label="Calibration records"
+              aria-label="Service records"
               onRowAction={
                 canEdit
                   ? (key) => {
@@ -65,7 +64,8 @@ export function CalibrationsPage() {
               <Table.Header>
                 <Table.Column isRowHeader>Date</Table.Column>
                 <Table.Column>Asset tag</Table.Column>
-                <Table.Column>Calibrated by</Table.Column>
+                <Table.Column>Service</Table.Column>
+                <Table.Column>Performed by</Table.Column>
                 <Table.Column>Certificate</Table.Column>
                 <Table.Column>As received</Table.Column>
                 <Table.Column>As returned</Table.Column>
@@ -75,8 +75,8 @@ export function CalibrationsPage() {
               <Table.Body
                 items={data}
                 renderEmptyState={() => (
-                  <EmptyNote icon={<ClipboardCheck className="size-5" />} title="No calibration records yet">
-                    {canEdit ? "Use Record calibration to enter the first one." : "Nothing has been recorded yet."}
+                  <EmptyNote icon={<ClipboardCheck className="size-5" />} title="No service records yet">
+                    {canEdit ? "Use Record service to enter the first one." : "Nothing has been recorded yet."}
                   </EmptyNote>
                 )}
               >
@@ -98,6 +98,7 @@ export function CalibrationsPage() {
                         {r.asset_tag}
                       </Link>
                     </Table.Cell>
+                    <Table.Cell>{r.service_type_name}</Table.Cell>
                     <Table.Cell>
                       {r.calibrated_by_name}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
@@ -126,7 +127,9 @@ export function CalibrationsPage() {
                         {conditionReturnedMeta[r.condition_returned].label}
                       </StatusChip>
                     </Table.Cell>
-                    <Table.Cell>{formatCents(r.cost_cents)}</Table.Cell>
+                    <Table.Cell>
+                      <Money cents={r.cost_cents} />
+                    </Table.Cell>
                     <Table.Cell>{formatDate(r.next_due_date)}</Table.Cell>
                   </Table.Row>
                 )}

@@ -61,6 +61,7 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                 <Table.Column>Description</Table.Column>
                 {kind === "provider" && <Table.Column>Type</Table.Column>}
                 {kind === "status" && <Table.Column>Due tracking</Table.Column>}
+                {kind === "service_type" && <Table.Column>Calibration</Table.Column>}
                 <Table.Column>State</Table.Column>
               </Table.Header>
               <Table.Body
@@ -82,6 +83,9 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                       <Table.Cell>{item.is_internal ? "Internal" : "Outside vendor"}</Table.Cell>
                     )}
                     {kind === "status" && <Table.Cell>{item.tracks_due ? "Tracked" : "Excluded"}</Table.Cell>}
+                    {kind === "service_type" && (
+                      <Table.Cell>{item.counts_as_calibration ? "Sets due dates" : "Doesn't affect due dates"}</Table.Cell>
+                    )}
                     <Table.Cell>
                       <StatusChip color={item.is_active ? "success" : "default"}>
                         {item.is_active ? "Active" : "Inactive"}

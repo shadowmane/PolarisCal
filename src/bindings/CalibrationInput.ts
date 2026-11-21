@@ -5,6 +5,10 @@ import type { ConditionReturned } from "./ConditionReturned";
 
 export type CalibrationInput = { asset_id: number, cal_date: string, 
 /**
+ * What kind of service this was (a service type list entry).
+ */
+service_type_id: number, 
+/**
  * Whether `calibrated_by_id` is a calibration provider or a manufacturer.
  */
 calibrated_by: CalibratedBy, calibrated_by_id: number, technician: string | null, cost_cents: number | null, certificate_number: string | null, condition_received: ConditionReceived, condition_returned: ConditionReturned, notes: string | null, };

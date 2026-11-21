@@ -436,7 +436,9 @@ async fn recompute_asset_dates(conn: &mut Conn, asset_id: Id) -> Result<()> {
 
     let record_dates = conn
         .fetch_all(
-            "SELECT cal_date FROM calibration_records WHERE asset_id = ?1 AND is_archived = FALSE",
+            "SELECT r.cal_date FROM calibration_records r
+             JOIN service_types t ON t.id = r.service_type_id
+             WHERE r.asset_id = ?1 AND r.is_archived = FALSE AND t.counts_as_calibration = TRUE",
             params![asset_id],
         )
         .await?
@@ -471,6 +473,7 @@ async fn recompute_asset_dates(conn: &mut Conn, asset_id: Id) -> Result<()> {
 macro_rules! calibration_select {
     () => {
         "SELECT r.id, r.asset_id, a.asset_tag, r.cal_date, r.provider_id, r.manufacturer_id,
+                r.service_type_id, t.name AS service_type_name, t.counts_as_calibration,
                 COALESCE(p.name, m.name) AS calibrated_by_name,
                 r.technician, r.cost_cents, r.certificate_number,
                 r.condition_received, r.condition_returned, r.next_due_date, r.notes,
@@ -479,6 +482,7 @@ macro_rules! calibration_select {
                 r.is_archived, r.row_version, r.created_at, r.updated_at
          FROM calibration_records r
          JOIN assets a                ON a.id = r.asset_id
+         JOIN service_types t         ON t.id = r.service_type_id
          LEFT JOIN calibration_providers p ON p.id = r.provider_id
          LEFT JOIN manufacturers m         ON m.id = r.manufacturer_id"
     };
@@ -502,6 +506,9 @@ fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
         asset_id: row.get("asset_id")?,
         asset_tag: row.get("asset_tag")?,
         cal_date: row.get("cal_date")?,
+        service_type_id: row.get("service_type_id")?,
+        service_type_name: row.get("service_type_name")?,
+        counts_as_calibration: row.get("counts_as_calibration")?,
         calibrated_by,
         calibrated_by_id,
         calibrated_by_name: row.get("calibrated_by_name")?,
@@ -521,11 +528,27 @@ fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
 }
 
 /// The due date a calibration on `cal_date` establishes for this asset.
+/// For a service record: checks the item and service type, and returns the due date
+/// the record establishes (only calibration-type services set one).
 async fn due_date_for(
     conn: &mut Conn,
     asset_id: Id,
+    service_type_id: Id,
     cal_date: NaiveDate,
 ) -> Result<Option<NaiveDate>> {
+    let counts = conn
+        .fetch_optional(
+            "SELECT counts_as_calibration FROM service_types WHERE id = ?1",
+            params![service_type_id],
+        )
+        .await?
+        .ok_or_else(|| {
+            Error::validation(
+                "service_type_id",
+                "The selected service type does not exist.",
+            )
+        })?
+        .get::<bool>("counts_as_calibration")?;
     let row = conn
         .fetch_optional(
             "SELECT cal_interval_value, cal_interval_unit, cal_interval_end_of_month, is_archived
@@ -539,6 +562,9 @@ async fn due_date_for(
             "asset_id",
             "The selected item is archived.",
         ));
+    }
+    if !counts {
+        return Ok(None);
     }
     let interval = interval_from(&row)?;
     Ok(interval.and_then(|i| add_interval(cal_date, i)))
@@ -558,6 +584,7 @@ fn lookup_table(kind: LookupKind) -> (&'static str, Option<&'static str>) {
         LookupKind::Manufacturer => ("manufacturers", None),
         LookupKind::Provider => ("calibration_providers", Some("is_internal")),
         LookupKind::Status => ("asset_statuses", Some("tracks_due")),
+        LookupKind::ServiceType => ("service_types", Some("counts_as_calibration")),
     }
 }
 
@@ -573,9 +600,15 @@ fn lookup_select(kind: LookupKind) -> String {
     } else {
         "NULL"
     };
+    let counts = if kind == LookupKind::ServiceType {
+        "counts_as_calibration"
+    } else {
+        "NULL"
+    };
     format!(
         "SELECT id, name, description, is_active, sort_order,
-                {internal} AS is_internal, {tracks} AS tracks_due
+                {internal} AS is_internal, {tracks} AS tracks_due,
+                {counts} AS counts_as_calibration
          FROM {table}"
     )
 }
@@ -590,6 +623,7 @@ fn map_lookup(row: &Row, kind: LookupKind) -> Result<LookupItem> {
         sort_order: row.get("sort_order")?,
         is_internal: row.get("is_internal")?,
         tracks_due: row.get("tracks_due")?,
+        counts_as_calibration: row.get("counts_as_calibration")?,
     })
 }
 
@@ -598,6 +632,7 @@ fn lookup_extra(kind: LookupKind, input: &LookupInput) -> Option<bool> {
     match kind {
         LookupKind::Provider => Some(input.is_internal.unwrap_or(false)),
         LookupKind::Status => Some(input.tracks_due.unwrap_or(true)),
+        LookupKind::ServiceType => Some(input.counts_as_calibration.unwrap_or(true)),
         _ => None,
     }
 }
@@ -612,14 +647,11 @@ fn lookup_usage(kind: LookupKind) -> &'static [Usage] {
         LookupKind::Owner => &[("assets", "owner_id", "item")],
         LookupKind::Manufacturer => &[
             ("assets", "manufacturer_id", "item"),
-            (
-                "calibration_records",
-                "manufacturer_id",
-                "calibration record",
-            ),
+            ("calibration_records", "manufacturer_id", "service record"),
         ],
         LookupKind::Status => &[("assets", "status_id", "item")],
-        LookupKind::Provider => &[("calibration_records", "provider_id", "calibration record")],
+        LookupKind::Provider => &[("calibration_records", "provider_id", "service record")],
+        LookupKind::ServiceType => &[("calibration_records", "service_type_id", "service record")],
     }
 }
 
@@ -1130,6 +1162,9 @@ impl Store for SqlStore {
                 .unwrap_or(AppSettings::DEFAULT_IDLE_LOCK_MINUTES),
             attachments_root: value("attachments_root").filter(|v| !v.is_empty()),
             update_checks: value("update_checks").is_none_or(|v| v != "false"),
+            currency_symbol: value("currency_symbol")
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| AppSettings::DEFAULT_CURRENCY.into()),
         })
     }
 
@@ -1149,6 +1184,7 @@ impl Store for SqlStore {
                 settings.attachments_root.clone().unwrap_or_default(),
             ),
             ("update_checks", settings.update_checks.to_string()),
+            ("currency_symbol", settings.currency_symbol.clone()),
         ];
         for (key, value) in pairs {
             let exists = tx
@@ -1178,6 +1214,13 @@ impl Store for SqlStore {
                 field: "Attachments folder".into(),
                 old: before.attachments_root.clone(),
                 new: settings.attachments_root.clone(),
+            });
+        }
+        if before.currency_symbol != settings.currency_symbol {
+            changes.push(FieldChange {
+                field: "Currency symbol".into(),
+                old: Some(before.currency_symbol.clone()),
+                new: Some(settings.currency_symbol.clone()),
             });
         }
         if before.update_checks != settings.update_checks {
@@ -1331,6 +1374,20 @@ impl Store for SqlStore {
             .await
             .map_err(|e| write_err(e, || format!("'{}' is already in this list.", input.name)))?;
         let after = fetch_lookup(&mut tx, kind, id).await?;
+        if after.counts_as_calibration != before.counts_as_calibration {
+            let assets = tx
+                .fetch_all(
+                    "SELECT DISTINCT asset_id FROM calibration_records WHERE service_type_id = ?1",
+                    params![id],
+                )
+                .await?
+                .iter()
+                .map(|r| r.get::<Id>("asset_id"))
+                .collect::<Result<Vec<_>>>()?;
+            for asset_id in assets {
+                recompute_asset_dates(&mut tx, asset_id).await?;
+            }
+        }
         write_audit(
             &mut tx,
             NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Lookup)
@@ -1365,15 +1422,17 @@ impl Store for SqlStore {
                 uses.join(" and ")
             )));
         }
-        if kind == LookupKind::Status
+        if matches!(kind, LookupKind::Status | LookupKind::ServiceType)
             && tx
-                .scalar("SELECT COUNT(*) AS n FROM asset_statuses", params![])
+                .scalar(&format!("SELECT COUNT(*) AS n FROM {table}"), params![])
                 .await?
                 <= 1
         {
-            return Err(Error::Conflict(
-                "This is the only status, and every item needs one.".into(),
-            ));
+            return Err(Error::Conflict(if kind == LookupKind::Status {
+                "This is the only status, and every item needs one.".into()
+            } else {
+                "This is the only service type, and every service record needs one.".into()
+            }));
         }
         tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])
             .await
@@ -1848,15 +1907,21 @@ impl Store for SqlStore {
     ) -> Result<CalibrationRecord> {
         input.normalize(today())?;
         let mut tx = self.begin().await?;
-        let next_due = due_date_for(&mut tx, input.asset_id, input.cal_date).await?;
+        let next_due = due_date_for(
+            &mut tx,
+            input.asset_id,
+            input.service_type_id,
+            input.cal_date,
+        )
+        .await?;
 
         let id = tx
             .insert(
                 "INSERT INTO calibration_records (
                     asset_id, cal_date, provider_id, technician, cost_cents, certificate_number,
                     condition_received, condition_returned, next_due_date, notes, created_at, updated_at,
-                    manufacturer_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)",
+                    manufacturer_id, service_type_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13)",
                 params![
                     input.asset_id,
                     input.cal_date,
@@ -1869,11 +1934,12 @@ impl Store for SqlStore {
                     next_due,
                     &input.notes,
                     now(),
-                    calibrated_by_columns(&input).1
+                    calibrated_by_columns(&input).1,
+                    input.service_type_id
                 ],
             )
             .await
-            .map_err(|e| write_err(e, || "This calibration record already exists.".into()))?;
+            .map_err(|e| write_err(e, || "This service record already exists.".into()))?;
 
         recompute_asset_dates(&mut tx, input.asset_id).await?;
         let record = fetch_calibration(&mut tx, id).await?;
@@ -1906,7 +1972,13 @@ impl Store for SqlStore {
                 "A calibration record cannot be moved to a different item. Archive it and create a new one.",
             ));
         }
-        let next_due = due_date_for(&mut tx, input.asset_id, input.cal_date).await?;
+        let next_due = due_date_for(
+            &mut tx,
+            input.asset_id,
+            input.service_type_id,
+            input.cal_date,
+        )
+        .await?;
 
         let changed = tx
             .execute(
@@ -1914,7 +1986,7 @@ impl Store for SqlStore {
                     cal_date = ?3, provider_id = ?4, technician = ?5, cost_cents = ?6,
                     certificate_number = ?7, condition_received = ?8, condition_returned = ?9,
                     next_due_date = ?10, notes = ?11, updated_at = ?12, manufacturer_id = ?13,
-                    row_version = row_version + 1
+                    service_type_id = ?14, row_version = row_version + 1
                  WHERE id = ?1 AND row_version = ?2",
                 params![
                     id,
@@ -1929,11 +2001,12 @@ impl Store for SqlStore {
                     next_due,
                     &input.notes,
                     now(),
-                    calibrated_by_columns(&input).1
+                    calibrated_by_columns(&input).1,
+                    input.service_type_id
                 ],
             )
             .await
-            .map_err(|e| write_err(e, || "This calibration record already exists.".into()))?;
+            .map_err(|e| write_err(e, || "This service record already exists.".into()))?;
 
         if changed == 0 {
             return Err(

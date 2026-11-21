@@ -30,6 +30,7 @@ export function toSheet(report: ReportTable): ExportSheet {
     subtitle: report.subtitle ?? null,
     columns: report.columns.map((c) => ({ header: c.header, kind: c.kind, width: c.width ?? null })),
     rows: report.rows,
+    currency_symbol: null,
   };
 }
 
@@ -149,13 +150,14 @@ export function outOfToleranceReport(
     .sort((x, y) => (x.cal_date < y.cal_date ? 1 : x.cal_date > y.cal_date ? -1 : y.id - x.id));
   return {
     title: "Out of tolerance",
-    subtitle: `Received out of tolerance or inoperative, ${from} to ${to}`,
+    subtitle: `Service records received out of tolerance or inoperative, ${from} to ${to}`,
     columns: [
-      { header: "Calibrated", kind: "date" },
+      { header: "Date", kind: "date" },
+      { header: "Service", kind: "text", width: 14 },
       { header: "Asset tag", kind: "text", width: 14 },
       { header: "Description", kind: "text", width: 30 },
       { header: "Location", kind: "text", width: 18 },
-      { header: "Calibrated by", kind: "text", width: 22 },
+      { header: "Performed by", kind: "text", width: 22 },
       { header: "Technician", kind: "text", width: 16 },
       { header: "Certificate", kind: "text", width: 16 },
       { header: "As received", kind: "text", width: 16 },
@@ -166,6 +168,7 @@ export function outOfToleranceReport(
       const a = byId.get(c.asset_id);
       return [
         c.cal_date,
+        c.service_type_name,
         c.asset_tag,
         t(a?.description),
         t(a?.location_name),
@@ -244,11 +247,12 @@ export function historyReport(asset: Asset, calibrations: CalibrationRecord[]): 
     .filter(Boolean)
     .join(" · ");
   return {
-    title: `Calibration history: ${asset.asset_tag}`,
+    title: `Service history: ${asset.asset_tag}`,
     subtitle: identity,
     columns: [
-      { header: "Calibrated", kind: "date" },
-      { header: "Calibrated by", kind: "text", width: 22 },
+      { header: "Date", kind: "date" },
+      { header: "Service", kind: "text", width: 14 },
+      { header: "Performed by", kind: "text", width: 22 },
       { header: "Technician", kind: "text", width: 16 },
       { header: "Certificate", kind: "text", width: 16 },
       { header: "As received", kind: "text", width: 16 },
@@ -259,6 +263,7 @@ export function historyReport(asset: Asset, calibrations: CalibrationRecord[]): 
     ],
     rows: records.map((c) => [
       c.cal_date,
+      c.service_type_name,
       c.calibrated_by_name,
       t(c.technician),
       t(c.certificate_number),
@@ -284,11 +289,12 @@ export interface LabelData {
   by: string | null;
 }
 
-/** One label per item: its last active calibration's date and who did it, and the next due date. */
+/** One label per item: its last active calibration's date and who did it (repairs and other
+ * non-calibration service are ignored), and the next due date. */
 export function labelData(assets: Asset[], calibrations: CalibrationRecord[]): LabelData[] {
   const latest = new Map<number, CalibrationRecord>();
   for (const c of calibrations) {
-    if (c.is_archived) continue;
+    if (c.is_archived || !c.counts_as_calibration) continue;
     const seen = latest.get(c.asset_id);
     if (!seen || c.cal_date > seen.cal_date || (c.cal_date === seen.cal_date && c.id > seen.id)) latest.set(c.asset_id, c);
   }

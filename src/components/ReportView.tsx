@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import type { ExportCell } from "../bindings/ExportCell";
 import { ApiError, api } from "../lib/api";
+import { currencySymbol, useCurrencySymbol } from "../lib/currency";
 import { EMPTY, formatCents, formatDate } from "../lib/format";
 import { isoToday, type ReportColumn, type ReportTable, toSheet } from "../lib/reports";
 
@@ -40,7 +41,7 @@ export function ReportToolbar({ report, fileName }: { report: ReportTable; fileN
     if (!path) return;
     setBusy(true);
     try {
-      await api.exportXlsx(path, [toSheet(report)]);
+      await api.exportXlsx(path, [{ ...toSheet(report), currency_symbol: currencySymbol() }]);
       toast.success(`Saved ${path.split(/[\\/]/).pop()}`);
     } catch (e) {
       toast.danger(e instanceof ApiError ? e.message : String(e));
@@ -64,6 +65,7 @@ export function ReportToolbar({ report, fileName }: { report: ReportTable; fileN
 /** The printable report: title, subtitle, and table. Rows link to their item on screen. */
 export function ReportBody({ report, emptyText }: { report: ReportTable; emptyText: string }) {
   const navigate = useNavigate();
+  useCurrencySymbol(); // re-render money cells if the currency changes
   const wide = report.columns.length > 7;
   usePageStyle(`@page { size: ${wide ? "landscape" : "portrait"}; }`);
 

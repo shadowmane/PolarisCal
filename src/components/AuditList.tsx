@@ -62,7 +62,7 @@ export function AuditList({ entries, showSubject = true }: { entries: AuditEntry
                 </span>
               )}
               {!showSubject && e.entity === "calibration" && (
-                <span className="font-medium">Calibration record {e.entity_label ? `(${e.entity_label})` : ""}</span>
+                <span className="font-medium">Service record {e.entity_label ? `(${e.entity_label})` : ""}</span>
               )}
               {!showSubject && e.entity === "attachment" && (
                 <span className="font-medium">File {e.entity_label ? `"${e.entity_label}"` : ""}</span>

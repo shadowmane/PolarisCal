@@ -79,6 +79,12 @@ pub(crate) const TABLES: &[TableSpec] = &[
         columns: lookup_columns!("tracks_due"),
     },
     TableSpec {
+        name: "service_types",
+        label: "Service types",
+        identity: true,
+        columns: lookup_columns!("counts_as_calibration"),
+    },
+    TableSpec {
         name: "users",
         label: "Users",
         identity: true,
@@ -132,12 +138,13 @@ pub(crate) const TABLES: &[TableSpec] = &[
     },
     TableSpec {
         name: "calibration_records",
-        label: "Calibration records",
+        label: "Service records",
         identity: true,
         columns: &[
             ("id", Int),
             ("asset_id", Int),
             ("cal_date", Date),
+            ("service_type_id", Int),
             ("provider_id", Int),
             ("manufacturer_id", Int),
             ("technician", Text),
@@ -207,7 +214,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
 ];
 
 /// Tables a fresh database fills with defaults; an import replaces their contents.
-const SEEDED: &[&str] = &["asset_statuses", "app_settings"];
+const SEEDED: &[&str] = &["asset_statuses", "service_types", "app_settings"];
 
 pub(crate) fn label(table: &str) -> String {
     TABLES

@@ -58,6 +58,9 @@ function cal(id: number, assetId: number, date: string, over: Partial<Calibratio
     asset_id: assetId,
     asset_tag: `A${assetId}`,
     cal_date: date,
+    service_type_id: 1,
+    service_type_name: "Calibration",
+    counts_as_calibration: true,
     calibrated_by: "provider",
     calibrated_by_id: 1,
     calibrated_by_name: "Acme Labs",
@@ -126,8 +129,9 @@ describe("outOfToleranceReport", () => {
     ];
     const r = outOfToleranceReport(cals, [asset(1, "A1")], "2026-01-01", "2026-12-31");
     expect(r.rows.map((row) => row[0])).toEqual(["2026-05-01", "2026-02-01"]);
-    expect(r.rows[0].slice(7, 9)).toEqual(["Inoperative", "Limited calibration"]);
-    expect(r.rows[0][3]).toBe("Lab A");
+    expect(r.rows[0].slice(8, 10)).toEqual(["Inoperative", "Limited calibration"]);
+    expect(r.rows[0][4]).toBe("Lab A");
+    expect(r.rows[0][1]).toBe("Calibration");
   });
 });
 
@@ -144,11 +148,11 @@ describe("registerReport and historyReport", () => {
   it("shows one item's active calibrations newest first, with cost in cents", () => {
     const a = asset(1, "DMM-1", { serial_number: "123" });
     const r = historyReport(a, [cal(1, 1, "2025-01-01"), cal(2, 1, "2026-01-01"), cal(3, 2, "2026-02-01")]);
-    expect(r.title).toBe("Calibration history: DMM-1");
+    expect(r.title).toBe("Service history: DMM-1");
     expect(r.subtitle).toBe("DMM-1 description · Fluke 87V · S/N 123");
     expect(r.rows.map((row) => row[0])).toEqual(["2026-01-01", "2025-01-01"]);
-    expect(r.rows[0][6]).toBe(12_500);
-    expect(toSheet(r).columns[6]).toEqual({ header: "Cost", kind: "money", width: null });
+    expect(r.rows[0][7]).toBe(12_500);
+    expect(toSheet(r).columns[7]).toEqual({ header: "Cost", kind: "money", width: null });
   });
 });
 
@@ -161,6 +165,7 @@ describe("labels", () => {
         cal(1, 1, "2025-01-01", { calibrated_by_name: "Old Lab" }),
         cal(2, 1, "2026-01-01", { technician: "J. Smith" }),
         cal(3, 1, "2026-06-01", { is_archived: true, calibrated_by_name: "Archived Lab" }),
+        cal(4, 1, "2026-07-01", { counts_as_calibration: false, calibrated_by_name: "Repair Shop" }),
       ],
     );
     expect(label).toMatchObject({ tag: "DMM-1", calibrated: "2026-01-01", due: "2027-01-01", by: "Acme Labs, J. Smith" });

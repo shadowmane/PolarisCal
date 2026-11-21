@@ -9,4 +9,8 @@ export type ExportSheet = {
 /**
  * Also the worksheet tab name (shortened to Excel's 31-character limit).
  */
-title: string, subtitle: string | null, columns: Array<ExportColumn>, rows: Array<Array<ExportCell>>, };
+title: string, subtitle: string | null, columns: Array<ExportColumn>, rows: Array<Array<ExportCell>>, 
+/**
+ * Shown before money values; "$" when absent.
+ */
+currency_symbol: string | null, };

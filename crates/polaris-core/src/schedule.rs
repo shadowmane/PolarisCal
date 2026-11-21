@@ -88,8 +88,8 @@ pub struct DueSummary {
     pub total: i64,
     pub overdue: i64,
     pub due_30: i64,
-    pub due_31_60: i64,
-    pub due_61_90: i64,
+    /// Due in 31 to 90 days.
+    pub due_31_90: i64,
     pub current: i64,
     pub no_schedule: i64,
     pub not_tracked: i64,
@@ -114,10 +114,10 @@ impl DueSummary {
                 DueStatus::Current => {
                     let days = a.next_cal_date.map_or(i64::MAX, |d| (d - today).num_days());
                     // DueSoon already covers 0..=30, so Current starts at 31 days out.
-                    match days {
-                        ..=60 => s.due_31_60 += 1,
-                        61..=90 => s.due_61_90 += 1,
-                        _ => s.current += 1,
+                    if days <= 90 {
+                        s.due_31_90 += 1;
+                    } else {
+                        s.current += 1;
                     }
                 }
             }

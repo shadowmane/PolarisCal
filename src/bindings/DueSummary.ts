@@ -5,7 +5,11 @@ import type { Asset } from "./Asset";
  * Counts for the dashboard. Buckets are exclusive: an overdue item is not
  * also counted as due within 30 days.
  */
-export type DueSummary = { today: string, total: number, overdue: number, due_30: number, due_31_60: number, due_61_90: number, current: number, no_schedule: number, not_tracked: number, 
+export type DueSummary = { today: string, total: number, overdue: number, due_30: number, 
+/**
+ * Due in 31 to 90 days.
+ */
+due_31_90: number, current: number, no_schedule: number, not_tracked: number, 
 /**
  * Overdue and due-within-30-days items, soonest first.
  */

@@ -1,3 +1,4 @@
+import { formatMoney } from "./currency";
 import type { AttachmentCategory } from "../bindings/AttachmentCategory";
 import type { AuditAction } from "../bindings/AuditAction";
 import type { AuditEntity } from "../bindings/AuditEntity";
@@ -18,10 +19,9 @@ export function formatDate(iso: string | null | undefined): string {
   return dateFormat.format(new Date(y, m - 1, d));
 }
 
-const money = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
-
+/** Money in the organization's currency (Settings). Components showing it call `useCurrencySymbol`. */
 export function formatCents(cents: number | null | undefined): string {
-  return cents == null ? EMPTY : money.format(cents / 100);
+  return cents == null ? EMPTY : formatMoney(cents / 100);
 }
 
 export function formatInterval(interval: CalInterval | null): string {
@@ -60,6 +60,7 @@ export const lookupKindMeta: Record<LookupKind, { label: string; singular: strin
   manufacturer: { label: "Manufacturers", singular: "Manufacturer" },
   provider: { label: "Calibration Providers", singular: "Provider" },
   status: { label: "Statuses", singular: "Status" },
+  service_type: { label: "Service Types", singular: "Service type" },
 };
 
 export const LOOKUP_KINDS: LookupKind[] = [
@@ -69,6 +70,7 @@ export const LOOKUP_KINDS: LookupKind[] = [
   "manufacturer",
   "provider",
   "status",
+  "service_type",
 ];
 
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -97,7 +99,7 @@ export const auditActionMeta: Record<AuditAction, { label: string; color: ChipCo
 
 export const auditEntityLabel: Record<AuditEntity, string> = {
   asset: "Item",
-  calibration: "Calibration",
+  calibration: "Service record",
   lookup: "List entry",
   user: "User",
   session: "Session",

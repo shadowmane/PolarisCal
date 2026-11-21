@@ -59,6 +59,20 @@ pub struct ExportSheet {
     pub subtitle: Option<String>,
     pub columns: Vec<ExportColumn>,
     pub rows: Vec<Vec<ExportCell>>,
+    /// Shown before money values; "$" when absent.
+    #[serde(default)]
+    pub currency_symbol: Option<String>,
+}
+
+/// An Excel number format showing `symbol` before amounts, e.g. `"€"#,##0.00`.
+fn money_format(symbol: &str) -> String {
+    let quoted = symbol.replace('"', "");
+    let space = if quoted.chars().all(|c| c.is_alphabetic()) && quoted.chars().count() > 1 {
+        " "
+    } else {
+        ""
+    };
+    format!("\"{quoted}{space}\"#,##0.00")
 }
 
 /// Excel forbids some characters in sheet names and limits them to 31 characters.
@@ -98,7 +112,6 @@ pub fn write_workbook(path: &Path, sheets: &[ExportSheet]) -> Result<(), XlsxErr
     let date_fmt = Format::new()
         .set_num_format("yyyy-mm-dd")
         .set_align(FormatAlign::Left);
-    let money_fmt = Format::new().set_num_format("#,##0.00");
     let number_fmt = Format::new().set_num_format("General");
     let text_fmt = Format::new().set_align(FormatAlign::Top);
     let generated = Local::now()
@@ -107,6 +120,9 @@ pub fn write_workbook(path: &Path, sheets: &[ExportSheet]) -> Result<(), XlsxErr
 
     let mut used = Vec::new();
     for sheet in sheets {
+        let money_fmt = Format::new().set_num_format(money_format(
+            sheet.currency_symbol.as_deref().unwrap_or("$"),
+        ));
         let ws = workbook.add_worksheet();
         ws.set_name(sheet_name(&sheet.title, &mut used))?;
         ws.write_string_with_format(0, 0, &sheet.title, &title_fmt)?;
@@ -219,6 +235,13 @@ mod tests {
     }
 
     #[test]
+    fn money_formats_show_the_symbol() {
+        assert_eq!(money_format("€"), "\"€\"#,##0.00");
+        assert_eq!(money_format("kr"), "\"kr \"#,##0.00");
+        assert_eq!(money_format("R$"), "\"R$\"#,##0.00");
+    }
+
+    #[test]
     fn cells_deserialize_from_ui_json() {
         let cells: Vec<ExportCell> = serde_json::from_str(r#"[1.5, "text", null]"#).unwrap();
         assert_eq!(
@@ -267,6 +290,7 @@ mod tests {
                     ExportCell::Empty(None),
                 ],
             ],
+            currency_symbol: Some("€".into()),
         };
         write_workbook(&path, &[sheet]).unwrap();
         let bytes = std::fs::read(&path).unwrap();

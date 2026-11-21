@@ -22,6 +22,7 @@ import { NavLink, Outlet, useNavigate } from "react-router";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { roleMeta } from "../lib/permissions";
+import { setCurrencySymbol } from "../lib/currency";
 import { checkOnStartup, useAvailableUpdate } from "../lib/updates";
 import { useAsync } from "../lib/useAsync";
 import { ChangePasswordForm } from "./AuthScreens";
@@ -35,7 +36,7 @@ interface NavItem {
 const MAIN_NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/assets", label: "Instruments & Systems", icon: Gauge },
-  { to: "/calibrations", label: "Calibration Records", icon: ClipboardCheck },
+  { to: "/calibrations", label: "Service Records", icon: ClipboardCheck },
   { to: "/reports", label: "Reports", icon: FileChartColumn },
 ];
 
@@ -178,7 +179,10 @@ export function AppShell() {
   useEffect(() => {
     api
       .getSettings()
-      .then((settings) => settings.update_checks && checkOnStartup())
+      .then((settings) => {
+        setCurrencySymbol(settings.currency_symbol);
+        if (settings.update_checks) checkOnStartup();
+      })
       .catch(() => undefined);
   }, []);
 
@@ -231,7 +235,7 @@ export function AppShell() {
       </nav>
 
       <main className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
-        <div className="mx-auto max-w-7xl px-8 py-7 print:max-w-none print:p-0">
+        <div className="px-8 py-7 print:p-0">
           <Outlet />
         </div>
       </main>

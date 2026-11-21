@@ -287,6 +287,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "calibrated by manufacturer",
         include_str!("../../migrations/mssql/0007_calibrated_by_manufacturer.sql"),
     ),
+    (
+        8,
+        "service types",
+        include_str!("../../migrations/mssql/0008_service_types.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

@@ -627,7 +627,7 @@ export function CopyDatabaseDialog({
                   }}
                 >
                   <p className="text-sm text-muted">
-                    Copies every item, calibration record, file record, list, user account (with passwords), setting,
+                    Copies every item, service record, file record, list, user account (with passwords), setting,
                     and the full audit trail, keeping their ids. The target must be empty: a new SQLite file, or an
                     empty database created on the server. Ask everyone to stop editing until the copy finishes.
                     Attached files stay in the attachments folder.

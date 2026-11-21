@@ -76,7 +76,7 @@ function AssetPicker({
 }
 
 /**
- * Create or edit a calibration record. Pass `record` to edit; pass `asset` to
+ * Create or edit a service record. Pass `record` to edit; pass `asset` to
  * fix which item a new record belongs to (otherwise the user picks one).
  */
 export function CalibrationDialog({
@@ -120,6 +120,14 @@ export function CalibrationDialog({
     setPendingFiles([]);
   }, [isOpen, record, asset]);
 
+  // A new record starts as the first type that counts as a calibration (normally "Calibration").
+  useEffect(() => {
+    if (!isOpen || record || form.service_type_id != null || !lookups.data) return;
+    const types = lookups.data.service_type.filter((t) => t.is_active);
+    const first = types.find((t) => t.counts_as_calibration) ?? types[0];
+    if (first) setForm((f) => ({ ...f, service_type_id: first.id }));
+  }, [isOpen, record, form.service_type_id, lookups.data]);
+
   function set<K extends keyof CalibrationForm>(key: K, value: CalibrationForm[K]) {
     setForm((f) => ({ ...f, [key]: value }));
     const errorKey = key === "cost" ? "cost_cents" : key;
@@ -149,7 +157,7 @@ export function CalibrationDialog({
       const saved = record
         ? await api.updateCalibration(record.id, record.row_version, converted.value, reason)
         : await api.createCalibration(converted.value);
-      toast.success(record ? "Calibration record saved" : `Calibration recorded for ${saved.asset_tag}`);
+      toast.success(record ? "Service record saved" : `Service recorded for ${saved.asset_tag}`);
       if (!record && pendingFiles.length > 0) {
         try {
           await api.addAttachments({
@@ -184,7 +192,7 @@ export function CalibrationDialog({
   }
 
   const fixedAsset = record ? { asset_tag: record.asset_tag } : asset;
-  const title = record ? "Edit calibration record" : "Record calibration";
+  const title = record ? "Edit service record" : "Record service";
 
   return (
     <>
@@ -237,21 +245,24 @@ export function CalibrationDialog({
                   {!fixedAsset && (
                     <AssetPicker value={form.asset_id} onChange={(v) => set("asset_id", v)} error={errors.asset_id} />
                   )}
+                  <LookupSelect
+                    kind="service_type"
+                    label="Service type"
+                    value={form.service_type_id}
+                    onChange={(v) => set("service_type_id", v)}
+                    lookups={lookups}
+                    error={errors.service_type_id}
+                    isRequired
+                  />
                   <DateInput
-                    label="Date of calibration"
+                    label="Date of service"
                     value={form.cal_date}
                     onChange={(v) => set("cal_date", v)}
                     error={errors.cal_date}
                     isRequired
                   />
-                  <TextInput
-                    label="Certificate number"
-                    value={form.certificate_number}
-                    onChange={(v) => set("certificate_number", v)}
-                    error={errors.certificate_number}
-                  />
                   <SelectInput<CalibratedBy>
-                    label="Calibrated by"
+                    label="Performed by"
                     value={form.calibrated_by}
                     onChange={(v) => {
                       if (!v || v === form.calibrated_by) return;
@@ -264,7 +275,7 @@ export function CalibrationDialog({
                         label: "Calibration provider",
                         description: "An outside calibration lab or an in-house technician.",
                       },
-                      { id: "manufacturer", label: "Manufacturer", description: "The item's maker did the calibration." },
+                      { id: "manufacturer", label: "Manufacturer", description: "The item's maker did the work." },
                     ]}
                     isRequired
                     allowEmpty={false}
@@ -298,6 +309,12 @@ export function CalibrationDialog({
                     onChange={(v) => set("technician", v)}
                     error={errors.technician}
                     description="The person who did the work, if known."
+                  />
+                  <TextInput
+                    label="Certificate number"
+                    value={form.certificate_number}
+                    onChange={(v) => set("certificate_number", v)}
+                    error={errors.certificate_number}
                   />
                   <SelectInput<ConditionReceived>
                     label="Condition received"
@@ -393,7 +410,7 @@ export function CalibrationDialog({
       <ConfirmDialog
         isOpen={confirmArchive}
         onOpenChange={setConfirmArchive}
-        title={record?.is_archived ? "Restore this calibration record?" : "Archive this calibration record?"}
+        title={record?.is_archived ? "Restore this service record?" : "Archive this service record?"}
         confirmLabel={record?.is_archived ? "Restore record" : "Archive record"}
         tone={record?.is_archived ? "accent" : "danger"}
         requireReason

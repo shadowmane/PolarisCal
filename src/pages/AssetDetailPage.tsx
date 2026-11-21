@@ -7,7 +7,7 @@ import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import { CalibrationDialog } from "../components/CalibrationDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ToggleSwitch } from "../components/fields";
-import { EmptyNote, ErrorAlert, Loading, StatusChip } from "../components/common";
+import { EmptyNote, ErrorAlert, Loading, Money, StatusChip } from "../components/common";
 import { AttachmentsPanel } from "../components/Attachments";
 import { AuditList } from "../components/AuditList";
 import { api } from "../lib/api";
@@ -17,7 +17,6 @@ import {
   conditionReturnedMeta,
   dueStatusMeta,
   EMPTY,
-  formatCents,
   formatDate,
   formatInterval,
 } from "../lib/format";
@@ -121,7 +120,7 @@ function HistoryCard({
     <Card>
       <Card.Header className="flex-row items-center justify-between">
         <div>
-          <Card.Title>Calibration history</Card.Title>
+          <Card.Title>Service history</Card.Title>
           <Card.Description>
             {canEdit ? "Newest first. Select a record to view or edit it." : "Newest first."}
           </Card.Description>
@@ -133,7 +132,7 @@ function HistoryCard({
           </Button>
           {!asset.is_archived && canEdit && (
             <Button size="sm" variant="secondary" onPress={onAdd}>
-              <Plus className="size-4" /> Record calibration
+              <Plus className="size-4" /> Record service
             </Button>
           )}
         </div>
@@ -143,7 +142,7 @@ function HistoryCard({
         <Table variant="secondary">
           <Table.ScrollContainer>
             <Table.Content
-              aria-label="Calibration history"
+              aria-label="Service history"
               onRowAction={
                 canEdit
                   ? (key) => {
@@ -155,7 +154,8 @@ function HistoryCard({
             >
               <Table.Header>
                 <Table.Column isRowHeader>Date</Table.Column>
-                <Table.Column>Calibrated by</Table.Column>
+                <Table.Column>Service</Table.Column>
+                <Table.Column>Performed by</Table.Column>
                 <Table.Column>Certificate</Table.Column>
                 <Table.Column>As received</Table.Column>
                 <Table.Column>As returned</Table.Column>
@@ -165,7 +165,7 @@ function HistoryCard({
               <Table.Body
                 items={records.data ?? []}
                 renderEmptyState={() => (
-                  <EmptyNote icon={<ClipboardCheck className="size-5" />} title="No calibrations recorded" />
+                  <EmptyNote icon={<ClipboardCheck className="size-5" />} title="No service recorded" />
                 )}
               >
                 {(r) => (
@@ -177,6 +177,7 @@ function HistoryCard({
                       {formatDate(r.cal_date)}
                       {r.is_archived && <span className="ml-2 text-xs text-muted">(archived)</span>}
                     </Table.Cell>
+                    <Table.Cell>{r.service_type_name}</Table.Cell>
                     <Table.Cell>
                       {r.calibrated_by_name}
                       {r.technician && <div className="text-xs text-muted">{r.technician}</div>}
@@ -205,7 +206,9 @@ function HistoryCard({
                         {conditionReturnedMeta[r.condition_returned].label}
                       </StatusChip>
                     </Table.Cell>
-                    <Table.Cell>{formatCents(r.cost_cents)}</Table.Cell>
+                    <Table.Cell>
+                      <Money cents={r.cost_cents} />
+                    </Table.Cell>
                     <Table.Cell>{formatDate(r.next_due_date)}</Table.Cell>
                   </Table.Row>
                 )}
@@ -230,7 +233,7 @@ function ChangeHistoryCard({ asset, version }: { asset: Asset; version: number }
     <Card>
       <Card.Header>
         <Card.Title>Change history</Card.Title>
-        <Card.Description>Every change to this item and its calibration records: who, when, and why.</Card.Description>
+        <Card.Description>Every change to this item and its service records: who, when, and why.</Card.Description>
       </Card.Header>
       <Card.Content>
         {entries.error && <ErrorAlert error={entries.error} onRetry={entries.reload} />}
@@ -329,7 +332,7 @@ export function AssetDetailPage() {
           <Alert.Content>
             <Alert.Title>This item is archived</Alert.Title>
             <Alert.Description>
-              It's hidden from lists and due tracking. Restore it to record new calibrations.
+              It's hidden from lists and due tracking. Restore it to record new service.
             </Alert.Description>
           </Alert.Content>
         </Alert>
@@ -402,7 +405,7 @@ export function AssetDetailPage() {
         <Card.Header>
           <Card.Title>Files</Card.Title>
           <Card.Description>
-            Certificates, manuals, and photos for this item and its calibration records. Selecting a file opens it.
+            Certificates, manuals, and photos for this item and its service records. Selecting a file opens it.
           </Card.Description>
         </Card.Header>
         <Card.Content>
@@ -439,7 +442,7 @@ export function AssetDetailPage() {
       >
         {asset.is_archived
           ? "The item returns to lists and due tracking."
-          : "Archived items are hidden from lists and due tracking. Their calibration history is kept, and you can restore them at any time."}
+          : "Archived items are hidden from lists and due tracking. Their service history is kept, and you can restore them at any time."}
       </ConfirmDialog>
     </div>
   );

@@ -75,6 +75,7 @@ describe("pickable", () => {
     sort_order: 0,
     is_internal: null,
     tracks_due: null,
+    counts_as_calibration: null,
   });
 
   it("offers active entries plus the current value even if inactive", () => {
@@ -171,6 +172,7 @@ describe("calibration form", () => {
       "calibrated_by_id",
       "condition_received",
       "condition_returned",
+      "service_type_id",
     ]);
   });
 
@@ -179,6 +181,7 @@ describe("calibration form", () => {
       emptyCalibrationForm({
         asset_id: 1,
         cal_date: "2026-06-01",
+        service_type_id: 1,
         calibrated_by: "manufacturer",
         calibrated_by_id: 2,
         condition_received: "out_of_tolerance",

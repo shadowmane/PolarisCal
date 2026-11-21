@@ -12,4 +12,9 @@ is_internal: boolean | null,
 /**
  * Statuses only: whether items in this status appear in due/overdue tracking.
  */
-tracks_due: boolean | null, };
+tracks_due: boolean | null, 
+/**
+ * Service types only: whether records of this type are calibrations, which set
+ * an item's last calibration and next due dates.
+ */
+counts_as_calibration: boolean | null, };

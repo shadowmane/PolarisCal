@@ -19,6 +19,7 @@ import {
 } from "@heroui/react";
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
+import { useCurrencySymbol } from "../lib/currency";
 import { fromDateValue, toDateValue } from "../lib/forms";
 
 interface BaseProps {
@@ -115,6 +116,7 @@ export function NumberInput({
   minValue,
   formatOptions,
   step,
+  prefix,
   "aria-label": ariaLabel,
 }: Omit<BaseProps, "label"> & {
   label?: string;
@@ -123,6 +125,8 @@ export function NumberInput({
   minValue?: number;
   step?: number;
   formatOptions?: Intl.NumberFormatOptions;
+  /** Shown inside the field before the number, e.g. a currency symbol. */
+  prefix?: ReactNode;
   "aria-label"?: string;
 }) {
   return (
@@ -141,7 +145,8 @@ export function NumberInput({
       aria-label={ariaLabel}
     >
       {label && <Label>{label}</Label>}
-      <NumberField.Group>
+      <NumberField.Group className={prefix ? "flex items-center" : undefined}>
+        {prefix && <span className="shrink-0 pl-3 text-sm leading-none text-muted select-none">{prefix}</span>}
         <NumberField.Input />
       </NumberField.Group>
       {description && <Description>{description}</Description>}
@@ -150,13 +155,16 @@ export function NumberInput({
   );
 }
 
-export function MoneyInput(props: Omit<Parameters<typeof NumberInput>[0], "formatOptions" | "minValue">) {
+/** An amount of money in the organization's currency (Settings). */
+export function MoneyInput(props: Omit<Parameters<typeof NumberInput>[0], "formatOptions" | "minValue" | "prefix">) {
+  const symbol = useCurrencySymbol();
   return (
     <NumberInput
       {...props}
       minValue={0}
       step={0.01}
-      formatOptions={{ style: "currency", currency: "USD", currencyDisplay: "symbol" }}
+      prefix={symbol}
+      formatOptions={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }}
     />
   );
 }

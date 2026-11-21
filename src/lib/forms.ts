@@ -186,12 +186,13 @@ export function formToAssetInput(f: AssetForm): Converted<AssetInput> {
 }
 
 // ---------------------------------------------------------------------------
-// Calibration records
+// Service records (stored as calibration_records)
 // ---------------------------------------------------------------------------
 
 export interface CalibrationForm {
   asset_id: number | null;
   cal_date: string | null;
+  service_type_id: number | null;
   /** A calibration provider, or the manufacturer. */
   calibrated_by: CalibratedBy;
   calibrated_by_id: number | null;
@@ -208,6 +209,7 @@ export function emptyCalibrationForm(defaults: Partial<CalibrationForm> = {}): C
   return {
     asset_id: null,
     cal_date: null,
+    service_type_id: null,
     calibrated_by: "provider",
     calibrated_by_id: null,
     technician: "",
@@ -224,6 +226,7 @@ export function calibrationToForm(r: CalibrationRecord): CalibrationForm {
   return {
     asset_id: r.asset_id,
     cal_date: r.cal_date,
+    service_type_id: r.service_type_id,
     calibrated_by: r.calibrated_by,
     calibrated_by_id: r.calibrated_by_id,
     technician: r.technician ?? "",
@@ -238,7 +241,8 @@ export function calibrationToForm(r: CalibrationRecord): CalibrationForm {
 export function formToCalibrationInput(f: CalibrationForm): Converted<CalibrationInput> {
   const errors: FieldErrors = {};
   if (f.asset_id == null) errors.asset_id = "Choose the item that was calibrated.";
-  if (!f.cal_date) errors.cal_date = "Calibration date is required.";
+  if (!f.cal_date) errors.cal_date = "Service date is required.";
+  if (f.service_type_id == null) errors.service_type_id = "Choose the type of service.";
   if (f.calibrated_by_id == null)
     errors.calibrated_by_id =
       f.calibrated_by === "manufacturer" ? "Choose the manufacturer." : "Choose the calibration provider.";
@@ -253,6 +257,7 @@ export function formToCalibrationInput(f: CalibrationForm): Converted<Calibratio
     value: {
       asset_id: f.asset_id!,
       cal_date: f.cal_date!,
+      service_type_id: f.service_type_id!,
       calibrated_by: f.calibrated_by,
       calibrated_by_id: f.calibrated_by_id!,
       technician: optionalText(f.technician),
@@ -277,6 +282,7 @@ export function emptyLookupInput(kind: LookupKind, sortOrder = 0): LookupInput {
     sort_order: sortOrder,
     is_internal: kind === "provider" ? false : null,
     tracks_due: kind === "status" ? true : null,
+    counts_as_calibration: kind === "service_type" ? true : null,
   };
 }
 
@@ -288,5 +294,6 @@ export function lookupToInput(item: LookupItem): LookupInput {
     sort_order: item.sort_order,
     is_internal: item.is_internal,
     tracks_due: item.tracks_due,
+    counts_as_calibration: item.counts_as_calibration,
   };
 }

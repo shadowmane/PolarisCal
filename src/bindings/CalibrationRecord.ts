@@ -5,6 +5,14 @@ import type { ConditionReturned } from "./ConditionReturned";
 
 export type CalibrationRecord = { id: number, asset_id: number, asset_tag: string, cal_date: string, 
 /**
+ * What kind of service this was (Calibration, Repair, ...).
+ */
+service_type_id: number, service_type_name: string, 
+/**
+ * Whether this record's service type counts as a calibration (and so sets due dates).
+ */
+counts_as_calibration: boolean, 
+/**
  * Whether a calibration provider or a manufacturer did the work.
  */
 calibrated_by: CalibratedBy, 

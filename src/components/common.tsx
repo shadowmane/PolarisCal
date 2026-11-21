@@ -1,6 +1,8 @@
 import { Alert, Button, Chip, Spinner } from "@heroui/react";
 import type { ReactNode } from "react";
 import type { ApiError } from "../lib/api";
+import { useCurrencySymbol } from "../lib/currency";
+import { formatCents } from "../lib/format";
 
 export function PageHeader({
   title,
@@ -49,6 +51,12 @@ export function ErrorAlert({
       )}
     </Alert>
   );
+}
+
+/** An amount in cents, in the organization's currency; updates if the currency changes. */
+export function Money({ cents }: { cents: number | null | undefined }) {
+  useCurrencySymbol();
+  return <>{formatCents(cents)}</>;
 }
 
 export function Loading({ label = "Loading…" }: { label?: string }) {

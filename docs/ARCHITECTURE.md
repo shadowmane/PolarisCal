@@ -47,7 +47,7 @@ These were agreed on before development started (2026-11-20).
 | Certificates | Files stored on a configured shared folder/UNC path; the database stores the path. |
 | Change history | Full audit trail: who, when, why, old value, new value. Records are archived, never deleted; only list entries nothing uses yet can be deleted (audited). |
 | Hierarchy | A System contains Instruments. Each item keeps its own calibration schedule. |
-| Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists; technicians can add entries (but not edit or delete them). A calibration is done by either a calibration provider or the item's manufacturer. |
+| Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists; technicians can add entries (but not edit or delete them). Service records have a **service type** (seeded: Calibration, Repair); a service is done by either a calibration provider or the item's manufacturer. |
 
 ## Core rules
 
@@ -64,6 +64,9 @@ All of these live in `polaris-core` so every backend applies them identically.
   * *last calibration* is the latest non-archived record's date. While an item has no records
     it is the manually entered value (`last_cal_date_entered`, for items migrated from an older
     system), which is stored separately so it comes back if every record is archived;
+  * Only **service records whose type counts as a calibration** (Calibration by default; not Repair)
+    set the last calibration date and a due date. Changing whether a type counts re-derives the
+    affected items' dates.
   * *next calibration* is always last + interval and is never edited directly. With **End of month**
     on, it moves to the last day of that month (12 months from Nov 20, 2026 is Nov 30, 2027).
 * **Due status**: an item whose status has *tracks due* switched off (Out of Service, Retired,
@@ -138,7 +141,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 7) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 8) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -208,6 +211,14 @@ refuses a target that already holds data, verifies each table's row count, and r
 both audit trails (`Data copied out` / `Data copied in`). The copy doesn't switch computers over;
 the dialog offers to switch this one, and a shared settings file switches everyone. Attached files
 stay where they are, since the database stores paths relative to the attachments folder.
+
+## Service records and currency
+
+Calibration records are called **service records** in the app (the table is still
+`calibration_records`). Each has a service type from an admin-managed list; the type's
+"Counts as a calibration" switch decides whether the record moves the item's schedule. Costs are
+shown with the organization's **currency symbol** (Settings; $ by default), in the app, reports, and
+Excel exports. The symbol is display only; amounts are never converted.
 
 ## Reports and labels
 

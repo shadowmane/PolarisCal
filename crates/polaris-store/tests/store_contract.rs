@@ -141,6 +141,7 @@ fn lookup(name: &str) -> LookupInput {
         sort_order: 0,
         is_internal: None,
         tracks_due: None,
+        counts_as_calibration: None,
     }
 }
 
@@ -191,10 +192,14 @@ async fn provider(store: &dyn Store) -> i64 {
         .id
 }
 
+const CALIBRATION: i64 = 1;
+
 fn cal(asset_id: i64, provider_id: i64, date: NaiveDate) -> CalibrationInput {
     CalibrationInput {
         asset_id,
         cal_date: date,
+        // The seeded "Calibration" service type is always id 1 in a new database.
+        service_type_id: CALIBRATION,
         calibrated_by: CalibratedBy::Provider,
         calibrated_by_id: provider_id,
         technician: Some("  J. Smith ".into()),
@@ -211,7 +216,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 7);
+    assert_eq!(info.schema_version, 8);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -405,7 +410,7 @@ async fn unused_list_entries_can_be_deleted_but_used_ones_cannot() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, Error::Conflict(ref m) if m.contains("calibration record")),
+        matches!(err, Error::Conflict(ref m) if m.contains("service record")),
         "{err}"
     );
 
@@ -696,7 +701,7 @@ async fn a_manufacturer_can_be_who_calibrated() {
         created
             .changes
             .iter()
-            .any(|c| c.field == "Calibrated by"
+            .any(|c| c.field == "Performed by"
                 && c.new.as_deref() == Some("Keysight (manufacturer)"))
     );
 
@@ -706,7 +711,7 @@ async fn a_manufacturer_can_be_who_calibrated() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, Error::Conflict(ref m) if m.contains("1 calibration record")),
+        matches!(err, Error::Conflict(ref m) if m.contains("1 service record")),
         "{err}"
     );
 
@@ -733,6 +738,78 @@ async fn a_manufacturer_can_be_who_calibrated() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Validation(_)), "{err}");
+}
+
+#[tokio::test]
+async fn service_types_are_seeded_and_only_calibrations_set_due_dates() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let types = s.list_lookups(LookupKind::ServiceType, true).await.unwrap();
+    let summary: Vec<_> = types
+        .iter()
+        .map(|t| (t.id, t.name.as_str(), t.counts_as_calibration))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (CALIBRATION, "Calibration", Some(true)),
+            (2, "Repair", Some(false))
+        ]
+    );
+    let repair = types[1].id;
+
+    let vendor = provider(s).await;
+    let asset = s
+        .create_asset(&ctx(), asset_input(s, "SVC-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    s.create_calibration(&ctx(), cal(asset.id, vendor, d(2026, 1, 10)))
+        .await
+        .unwrap();
+
+    // A later repair sets no due date and leaves the schedule alone.
+    let mut fix = cal(asset.id, vendor, d(2026, 3, 1));
+    fix.service_type_id = repair;
+    let record = s.create_calibration(&ctx(), fix).await.unwrap();
+    assert_eq!(record.service_type_name, "Repair");
+    assert!(!record.counts_as_calibration);
+    assert_eq!(record.next_due_date, None);
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.last_cal_date, Some(d(2026, 1, 10)));
+    assert_eq!(a.next_cal_date, Some(d(2027, 1, 10)));
+
+    // If an administrator decides repairs count after all, dates are re-derived.
+    let mut input = lookup("Repair");
+    input.counts_as_calibration = Some(true);
+    s.update_lookup(&ctx(), LookupKind::ServiceType, repair, input)
+        .await
+        .unwrap();
+    let a = s.get_asset(asset.id).await.unwrap();
+    assert_eq!(a.last_cal_date, Some(d(2026, 3, 1)));
+
+    // In use, so it can't be deleted; an unused type can, but never the last one.
+    assert!(matches!(
+        s.delete_lookup(&ctx(), LookupKind::ServiceType, repair)
+            .await,
+        Err(Error::Conflict(_))
+    ));
+    let spare = s
+        .create_lookup(&ctx(), LookupKind::ServiceType, lookup("Verification"))
+        .await
+        .unwrap();
+    assert_eq!(spare.counts_as_calibration, Some(true));
+    s.delete_lookup(&ctx(), LookupKind::ServiceType, spare.id)
+        .await
+        .unwrap();
+
+    // An unknown service type is reported.
+    let mut bad = cal(asset.id, vendor, d(2026, 4, 1));
+    bad.service_type_id = 9_999;
+    let err = s.create_calibration(&ctx(), bad).await.unwrap_err();
+    assert!(
+        matches!(err, Error::Validation(ref e) if e[0].field == "service_type_id"),
+        "{err}"
+    );
 }
 
 #[tokio::test]
@@ -1166,6 +1243,7 @@ async fn settings_are_validated_and_audited() {
                 idle_lock_minutes: 0,
                 attachments_root: None,
                 update_checks: true,
+                currency_symbol: "$".into(),
             },
         )
         .await;
@@ -1176,6 +1254,7 @@ async fn settings_are_validated_and_audited() {
             idle_lock_minutes: 30,
             attachments_root: None,
             update_checks: true,
+            currency_symbol: "$".into(),
         },
     )
     .await
@@ -1405,6 +1484,7 @@ async fn attachments_folder_setting_round_trips() {
                 idle_lock_minutes: 15,
                 attachments_root: Some(r" \\files\cal ".into()),
                 update_checks: true,
+                currency_symbol: "$".into(),
             },
         )
         .await
@@ -1422,6 +1502,7 @@ async fn attachments_folder_setting_round_trips() {
                 idle_lock_minutes: 15,
                 attachments_root: Some("relative".into()),
                 update_checks: true,
+                currency_symbol: "$".into(),
             },
         )
         .await;
@@ -1434,6 +1515,7 @@ async fn attachments_folder_setting_round_trips() {
             idle_lock_minutes: 15,
             attachments_root: None,
             update_checks: true,
+            currency_symbol: "$".into(),
         },
     )
     .await
@@ -1454,6 +1536,31 @@ async fn update_checks_default_on_and_can_be_turned_off() {
     assert_eq!(entry.entity, AuditEntity::Settings);
     assert_eq!(entry.changes[0].field, "Check for updates");
     assert_eq!(entry.changes[0].new.as_deref(), Some("No"));
+}
+
+#[tokio::test]
+async fn currency_symbol_defaults_to_dollar_and_is_audited() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let mut settings = s.settings().await.unwrap();
+    assert_eq!(settings.currency_symbol, "$");
+    settings.currency_symbol = " € ".into();
+    assert_eq!(
+        s.update_settings(&ctx(), settings.clone())
+            .await
+            .unwrap()
+            .currency_symbol,
+        "€"
+    );
+    assert_eq!(s.settings().await.unwrap().currency_symbol, "€");
+    let entry = &s.list_audit(&AuditFilter::default()).await.unwrap()[0];
+    assert!(entry.changes.iter().any(|c| c.field == "Currency symbol"
+        && c.old.as_deref() == Some("$")
+        && c.new.as_deref() == Some("€")));
+
+    settings.currency_symbol = "   ".into();
+    let err = s.update_settings(&ctx(), settings).await.unwrap_err();
+    assert!(matches!(err, Error::Validation(ref e) if e[0].field == "currency_symbol"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1505,6 +1612,7 @@ async fn populate(store: &dyn Store) {
                 idle_lock_minutes: 30,
                 attachments_root: Some(r"\\server\share\PolarisCal".into()),
                 update_checks: true,
+                currency_symbol: "$".into(),
             },
         )
         .await
@@ -1551,6 +1659,7 @@ async fn visible_state(
         LookupKind::Manufacturer,
         LookupKind::Provider,
         LookupKind::Status,
+        LookupKind::ServiceType,
     ] {
         lists.push(store.list_lookups(kind, true).await.unwrap());
     }

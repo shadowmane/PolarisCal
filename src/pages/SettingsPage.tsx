@@ -8,7 +8,8 @@ import { ConnectionDialog, CopyDatabaseDialog } from "../components/DatabaseForm
 import { STORE_BACKEND_NAMES } from "../lib/database";
 import { ApiError, api } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
-import { NumberInput, SwitchInput, TextInput } from "../components/fields";
+import { NumberInput, SelectInput, SwitchInput, TextInput } from "../components/fields";
+import { CURRENCY_SYMBOLS, setCurrencySymbol } from "../lib/currency";
 import { checkForUpdate, describeCheckError, installUpdate, useAvailableUpdate } from "../lib/updates";
 import { useAuth } from "../lib/auth";
 import { fieldErrors } from "../lib/forms";
@@ -173,6 +174,61 @@ function UpdatesCard({ version, settings, onSaved }: { version?: string; setting
   );
 }
 
+function CurrencyCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
+  const { can } = useAuth();
+  const isAdmin = can("admin");
+  const [busy, setBusy] = useState(false);
+  const current = settings?.currency_symbol ?? "$";
+  const options = CURRENCY_SYMBOLS.some((c) => c.id === current)
+    ? CURRENCY_SYMBOLS
+    : [...CURRENCY_SYMBOLS, { id: current, label: current }];
+
+  async function choose(symbol: string | null) {
+    if (!settings || !symbol || symbol === current) return;
+    setBusy(true);
+    try {
+      const saved = await api.updateSettings({ ...settings, currency_symbol: symbol });
+      setCurrencySymbol(saved.currency_symbol);
+      onSaved();
+      toast.success(`Amounts now show in ${saved.currency_symbol}`);
+    } catch (e) {
+      toast.danger(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>Currency</Card.Title>
+        <Card.Description>
+          The symbol shown with costs on service records, in reports, and in Excel exports. It doesn't convert
+          amounts. Applies to everyone.
+        </Card.Description>
+      </Card.Header>
+      <Card.Content>
+        {isAdmin ? (
+          <SelectInput<string>
+            label="Currency symbol"
+            value={current}
+            onChange={(v) => void choose(v)}
+            options={options}
+            isDisabled={busy || !settings}
+            isRequired
+            allowEmpty={false}
+            className="max-w-xs"
+          />
+        ) : (
+          <p className="text-sm">
+            Amounts are shown in <b>{current}</b>. An administrator can change this.
+          </p>
+        )}
+      </Card.Content>
+    </Card>
+  );
+}
+
 const EXAMPLE_SHARE = String.raw`\\server\share\PolarisCal`;
 
 function AttachmentsFolderCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
@@ -307,7 +363,7 @@ export function SettingsPage() {
       {error && <ErrorAlert error={error} onRetry={reload} />}
       {loading && !data && <Loading />}
 
-      <div className="flex max-w-3xl flex-col gap-6">
+      <div className="flex max-w-5xl flex-col gap-6">
         {data && (
           <Card>
             <Card.Header>
@@ -329,7 +385,7 @@ export function SettingsPage() {
                     <Row label="Database type">{STORE_BACKEND_NAMES[data.store.backend] ?? data.store.backend}</Row>
                     <Row label="Schema version">{data.store.schema_version}</Row>
                     <Row label="Records">
-                      {data.store.asset_count} items · {data.store.calibration_count} calibrations
+                      {data.store.asset_count} items · {data.store.calibration_count} service records
                     </Row>
                   </>
                 )}
@@ -388,6 +444,7 @@ export function SettingsPage() {
         />
 
         <SecurityCard settings={settings.data} onSaved={settings.reload} />
+        <CurrencyCard settings={settings.data} onSaved={settings.reload} />
         <AttachmentsFolderCard settings={settings.data} onSaved={settings.reload} />
         <UpdatesCard version={data?.version} settings={settings.data} onSaved={settings.reload} />
 

@@ -16,4 +16,8 @@ attachments_root: string | null,
 /**
  * Whether PolarisCal checks online for new versions. Turn off where IT deploys updates.
  */
-update_checks: boolean, };
+update_checks: boolean, 
+/**
+ * Shown before amounts of money throughout the app, e.g. "$" or "€".
+ */
+currency_symbol: string, };

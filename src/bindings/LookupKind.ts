@@ -3,4 +3,4 @@
 /**
  * The admin-managed pick lists.
  */
-export type LookupKind = "location" | "department" | "owner" | "manufacturer" | "provider" | "status";
+export type LookupKind = "location" | "department" | "owner" | "manufacturer" | "provider" | "status" | "service_type";

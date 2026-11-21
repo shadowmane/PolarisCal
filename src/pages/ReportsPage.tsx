@@ -25,7 +25,7 @@ const REPORTS: { id: ReportId; label: string; description: string }[] = [
   {
     id: "oot",
     label: "Out of tolerance",
-    description: "Calibrations where the item arrived out of tolerance or inoperative, for impact assessments.",
+    description: "Service records where the item arrived out of tolerance or inoperative, for impact assessments.",
   },
   { id: "register", label: "Instrument register", description: "Every Instrument and System with its schedule." },
 ];
@@ -200,7 +200,7 @@ export function ReportsPage() {
   );
 }
 
-/** One item's calibration history, for printing or Excel. */
+/** One item's service history, for printing or Excel. */
 export function HistoryReportPage() {
   const { id } = useParams();
   const assetId = Number(id);
@@ -220,14 +220,14 @@ export function HistoryReportPage() {
           <ArrowLeft className="size-4" /> Back to the item
         </Button>
         <PageHeader
-          title={data.data?.title ?? "Calibration history"}
+          title={data.data?.title ?? "Service history"}
           description={data.data?.subtitle}
           actions={data.data && <ReportToolbar report={data.data} fileName={data.data.title.replace(":", "")} />}
         />
       </div>
       {data.error && <ErrorAlert error={data.error} onRetry={data.reload} />}
       {data.loading && !data.data && <Loading />}
-      {data.data && <ReportBody report={data.data} emptyText="No calibrations recorded for this item yet." />}
+      {data.data && <ReportBody report={data.data} emptyText="No service recorded for this item yet." />}
     </>
   );
 }
