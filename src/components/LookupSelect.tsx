@@ -33,8 +33,8 @@ export function LookupSelect({
   placeholder?: string;
 }) {
   const { can } = useAuth();
-  // Pick lists are administrator-managed, so only administrators get the shortcut.
-  const canAdd = can("admin");
+  // Technicians and administrators may add entries; only administrators edit or delete them.
+  const canAdd = can("edit_records");
   const [adding, setAdding] = useState(false);
   const entries = lookups.data?.[kind] ?? [];
   const nextSortOrder = Math.max(0, ...entries.map((i) => i.sort_order)) + 10;

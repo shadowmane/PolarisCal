@@ -47,7 +47,7 @@ These were agreed on before development started (2026-11-20).
 | Certificates | Files stored on a configured shared folder/UNC path; the database stores the path. |
 | Change history | Full audit trail: who, when, why, old value, new value. Records are archived, never deleted; only list entries nothing uses yet can be deleted (audited). |
 | Hierarchy | A System contains Instruments. Each item keeps its own calibration schedule. |
-| Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists. |
+| Pick lists | Location, Department, Owner, Manufacturer, Calibrated By (providers), and Status are admin-managed lists; technicians can add entries (but not edit or delete them). |
 
 ## Core rules
 
@@ -85,7 +85,7 @@ All of these live in `polaris-core` so every backend applies them identically.
   | Role | Can |
   |---|---|
   | Administrator | Everything: users, pick lists, settings, the full audit log |
-  | Technician | Create, edit, and archive Instruments, Systems, and Calibration Records |
+  | Technician | Create, edit, and archive Instruments, Systems, and Calibration Records; add list entries |
   | Viewer | Read everything, change nothing |
 
   The UI hides what a role can't do, but every Tauri command checks the role itself

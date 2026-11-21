@@ -5,7 +5,7 @@ import type { Role } from "../bindings/Role";
  * in Rust; the backend enforces the same rules on every command.
  */
 export type Permission =
-  /** Create, edit, and archive Instruments, Systems, and Calibration Records. */
+  /** Create, edit, and archive Instruments, Systems, and Calibration Records; add list entries. */
   | "edit_records"
   /** Users, pick lists, settings, and the full audit log. */
   | "admin";
@@ -23,7 +23,7 @@ export const roleMeta: Record<Role, { label: string; description: string }> = {
   admin: { label: "Administrator", description: "Everything, including users, lists, and settings." },
   technician: {
     label: "Technician",
-    description: "Create, edit, and archive instruments, systems, and calibration records.",
+    description: "Create, edit, and archive instruments, systems, and calibration records, and add list entries.",
   },
   viewer: { label: "Viewer", description: "Read-only access." },
 };

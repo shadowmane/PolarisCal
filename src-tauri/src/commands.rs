@@ -508,7 +508,8 @@ pub async fn create_lookup(
     kind: LookupKind,
     input: LookupInput,
 ) -> CmdResult<LookupItem> {
-    let (store, me) = require(&state, Need::Admin).await?;
+    // Technicians may add entries while entering items; editing and deleting stay admin-only.
+    let (store, me) = require(&state, Need::Editor).await?;
     Ok(store.create_lookup(&ctx(&me, None), kind, input).await?)
 }
 

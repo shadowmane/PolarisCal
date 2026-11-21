@@ -16,6 +16,7 @@ function LookupTable({ kind }: { kind: LookupKind }) {
   const meta = lookupKindMeta[kind];
   const { can } = useAuth();
   const isAdmin = can("admin");
+  const canAdd = can("edit_records");
   const byId = new Map((data ?? []).map((i) => [i.id, i]));
   const nextSortOrder = Math.max(0, ...(data ?? []).map((i) => i.sort_order)) + 10;
 
@@ -23,9 +24,13 @@ function LookupTable({ kind }: { kind: LookupKind }) {
     <>
       <div className="mb-3 flex items-center justify-between">
         <p className="text-sm text-muted">
-          {isAdmin ? "Select an entry to edit it." : "Only administrators can change these lists."}
+          {isAdmin
+            ? "Select an entry to edit or delete it."
+            : canAdd
+              ? "You can add entries; only administrators can edit or delete them."
+              : "Only administrators can change these lists."}
         </p>
-        {isAdmin && (
+        {canAdd && (
           <Button size="sm" onPress={() => setDialog({ open: true })}>
             <Plus className="size-4" /> Add {meta.singular.toLowerCase()}
           </Button>
@@ -60,7 +65,7 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                 items={data ?? []}
                 renderEmptyState={() => (
                   <EmptyNote icon={<ListChecks className="size-5" />} title={`No ${meta.label.toLowerCase()} yet`}>
-                    {isAdmin ? "Add the first one with the button above." : "An administrator can add entries."}
+                    {canAdd ? "Add the first one with the button above." : "An administrator or technician can add entries."}
                   </EmptyNote>
                 )}
               >
