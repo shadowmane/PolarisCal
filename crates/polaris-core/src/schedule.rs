@@ -115,8 +115,63 @@ pub fn due_status(next: Option<NaiveDate>, status_tracks_due: bool, today: Naive
     }
 }
 
-/// Counts for the dashboard. Buckets are exclusive: an overdue item is not
-/// also counted as due within 30 days.
+/// The dashboard box an item is counted in. Exclusive: an overdue item is not also
+/// due within 30 days.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum DueBucket {
+    /// Overdue, including items in a calibration extension.
+    Overdue,
+    #[serde(rename = "due_30")]
+    Due30,
+    #[serde(rename = "due_31_90")]
+    Due31To90,
+    Current,
+    NoSchedule,
+}
+
+impl DueBucket {
+    /// `None` for items whose status doesn't track due dates.
+    pub fn of(asset: &Asset, today: NaiveDate) -> Option<Self> {
+        Some(match asset.due_status {
+            DueStatus::NotTracked => return None,
+            DueStatus::NoSchedule => Self::NoSchedule,
+            // Extended items are past due, just authorized for use: count them as overdue.
+            DueStatus::Overdue | DueStatus::Extended => Self::Overdue,
+            DueStatus::DueSoon => Self::Due30,
+            DueStatus::Current => {
+                let days = asset
+                    .next_cal_date
+                    .map_or(i64::MAX, |d| (d - today).num_days());
+                // DueSoon already covers 0..=30, so Current starts at 31 days out.
+                if days <= 90 {
+                    Self::Due31To90
+                } else {
+                    Self::Current
+                }
+            }
+        })
+    }
+}
+
+/// An item on the dashboard with the box it's counted in.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct DueItem {
+    pub bucket: DueBucket,
+    pub asset: Asset,
+}
+
+/// An item with a calibration interval but no calibration on record: it has no due
+/// date yet and needs calibrating now.
+pub fn needs_first_calibration(asset: &Asset) -> bool {
+    asset.due_status == DueStatus::NoSchedule
+        && asset.cal_interval.is_some()
+        && asset.last_cal_date.is_none()
+}
+
+/// Counts for the dashboard, one per [`DueBucket`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, TS)]
 #[ts(export)]
 pub struct DueSummary {
@@ -129,8 +184,11 @@ pub struct DueSummary {
     pub current: i64,
     pub no_schedule: i64,
     pub not_tracked: i64,
-    /// Overdue and due-within-30-days items, soonest first.
+    /// Items needing attention: never calibrated despite having an interval, then
+    /// overdue and due within 30 days, soonest first.
     pub attention: Vec<Asset>,
+    /// Every tracked item with its box, soonest first (no date first), for filtering.
+    pub items: Vec<DueItem>,
 }
 
 impl DueSummary {
@@ -142,31 +200,31 @@ impl DueSummary {
         };
         for a in assets.iter().filter(|a| !a.is_archived) {
             s.total += 1;
-            match a.due_status {
-                DueStatus::NotTracked => s.not_tracked += 1,
-                DueStatus::NoSchedule => s.no_schedule += 1,
-                // Extended items are past due, just authorized for use: count them as overdue.
-                DueStatus::Overdue | DueStatus::Extended => s.overdue += 1,
-                DueStatus::DueSoon => s.due_30 += 1,
-                DueStatus::Current => {
-                    let days = a.next_cal_date.map_or(i64::MAX, |d| (d - today).num_days());
-                    // DueSoon already covers 0..=30, so Current starts at 31 days out.
-                    if days <= 90 {
-                        s.due_31_90 += 1;
-                    } else {
-                        s.current += 1;
-                    }
-                }
-            }
-            if matches!(
-                a.due_status,
-                DueStatus::Overdue | DueStatus::Extended | DueStatus::DueSoon
-            ) {
+            let Some(bucket) = DueBucket::of(a, today) else {
+                s.not_tracked += 1;
+                continue;
+            };
+            *match bucket {
+                DueBucket::Overdue => &mut s.overdue,
+                DueBucket::Due30 => &mut s.due_30,
+                DueBucket::Due31To90 => &mut s.due_31_90,
+                DueBucket::Current => &mut s.current,
+                DueBucket::NoSchedule => &mut s.no_schedule,
+            } += 1;
+            if matches!(bucket, DueBucket::Overdue | DueBucket::Due30) || needs_first_calibration(a)
+            {
                 s.attention.push(a.clone());
             }
+            s.items.push(DueItem {
+                bucket,
+                asset: a.clone(),
+            });
         }
+        // `None` sorts first, so never-calibrated items lead the list.
         s.attention
             .sort_by_key(|a| (a.next_cal_date, a.asset_tag.clone()));
+        s.items
+            .sort_by_key(|i| (i.asset.next_cal_date, i.asset.asset_tag.clone()));
         s
     }
 }
@@ -348,6 +406,82 @@ mod tests {
         assert_eq!(
             apply_extension(None, None, Some((d(2026, 1, 1), 1))),
             (Some(d(2026, 1, 2)), true)
+        );
+    }
+
+    fn asset(tag: &str, next: Option<NaiveDate>, interval: Option<CalInterval>) -> Asset {
+        let today = d(2026, 11, 20);
+        Asset {
+            id: 0,
+            asset_tag: tag.into(),
+            kind: crate::model::AssetKind::Instrument,
+            parent_id: None,
+            parent_tag: None,
+            description: String::new(),
+            manufacturer_id: None,
+            manufacturer_name: None,
+            model_number: None,
+            serial_number: None,
+            location_id: None,
+            location_name: None,
+            department_id: None,
+            department_name: None,
+            owner_id: None,
+            owner_name: None,
+            status_id: 1,
+            status_name: "Active".into(),
+            warranty_end_date: None,
+            cal_interval: interval,
+            in_service_date: None,
+            first_cal_date: None,
+            last_cal_date: next.map(|n| n - Days::new(365)),
+            last_cal_date_entered: None,
+            next_cal_date: next,
+            calibration_extended: false,
+            due_status: due_status(next, true, today),
+            child_count: 0,
+            notes: None,
+            is_archived: false,
+            row_version: 1,
+            created_at: Default::default(),
+            updated_at: Default::default(),
+        }
+    }
+
+    #[test]
+    fn summary_buckets_and_attention() {
+        let today = d(2026, 11, 20);
+        let assets = [
+            asset("OVER", Some(d(2026, 11, 1)), Some(MONTHS_12)),
+            asset("SOON", Some(d(2026, 12, 1)), Some(MONTHS_12)),
+            asset("NEXT", Some(d(2027, 1, 15)), Some(MONTHS_12)),
+            asset("LATER", Some(d(2027, 6, 1)), Some(MONTHS_12)),
+            asset("NEVER", None, Some(MONTHS_12)),
+            asset("NOINT", None, None),
+        ];
+        let s = DueSummary::from_assets(&assets, today);
+        assert_eq!(
+            (s.overdue, s.due_30, s.due_31_90, s.current, s.no_schedule),
+            (1, 1, 1, 1, 2)
+        );
+        // Never calibrated (with an interval) leads; no interval isn't urgent.
+        let tags: Vec<_> = s.attention.iter().map(|a| a.asset_tag.as_str()).collect();
+        assert_eq!(tags, ["NEVER", "OVER", "SOON"]);
+        let buckets: Vec<_> = s
+            .items
+            .iter()
+            .map(|i| (i.asset.asset_tag.as_str(), i.bucket))
+            .collect();
+        assert_eq!(
+            buckets,
+            [
+                ("NEVER", DueBucket::NoSchedule),
+                ("NOINT", DueBucket::NoSchedule),
+                ("OVER", DueBucket::Overdue),
+                ("SOON", DueBucket::Due30),
+                ("NEXT", DueBucket::Due31To90),
+                ("LATER", DueBucket::Current),
+            ]
         );
     }
 
