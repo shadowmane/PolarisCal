@@ -12,6 +12,8 @@ import { CalibrationsPage } from "./pages/CalibrationsPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ListsPage } from "./pages/ListsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { HistoryReportPage, ReportsPage } from "./pages/ReportsPage";
+import { LabelsPage } from "./pages/LabelsPage";
 import { UsersPage } from "./pages/UsersPage";
 
 // Hash routing: the app is served from local files, so there is no server to
@@ -31,6 +33,9 @@ const router = createHashRouter([
       { path: "users", element: <UsersPage /> },
       { path: "audit", element: <AuditPage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "reports", element: <ReportsPage /> },
+      { path: "reports/labels", element: <LabelsPage /> },
+      { path: "reports/history/:id", element: <HistoryReportPage /> },
     ],
   },
 ]);

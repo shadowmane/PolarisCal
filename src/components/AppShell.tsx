@@ -1,7 +1,9 @@
 import { Button, Modal, Toast, Tooltip, toast, useTheme } from "@heroui/react";
 import {
+  ArrowDownCircle,
   ClipboardCheck,
   Database,
+  FileChartColumn,
   Gauge,
   History,
   KeyRound,
@@ -15,11 +17,12 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
-import { NavLink, Outlet } from "react-router";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { roleMeta } from "../lib/permissions";
+import { checkOnStartup, useAvailableUpdate } from "../lib/updates";
 import { useAsync } from "../lib/useAsync";
 import { ChangePasswordForm } from "./AuthScreens";
 
@@ -33,6 +36,7 @@ const MAIN_NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/assets", label: "Instruments & Systems", icon: Gauge },
   { to: "/calibrations", label: "Calibration Records", icon: ClipboardCheck },
+  { to: "/reports", label: "Reports", icon: FileChartColumn },
 ];
 
 const ADMIN_NAV: (NavItem & { adminOnly?: boolean })[] = [
@@ -167,10 +171,20 @@ export function AppShell() {
   const dark = resolvedTheme === "dark";
   const { can } = useAuth();
   const adminNav = ADMIN_NAV.filter((item) => !item.adminOnly || can("admin"));
+  const update = useAvailableUpdate();
+  const navigate = useNavigate();
+
+  // One quiet check for a new version per launch, unless an admin turned checks off.
+  useEffect(() => {
+    api
+      .getSettings()
+      .then((settings) => settings.update_checks && checkOnStartup())
+      .catch(() => undefined);
+  }, []);
 
   return (
-    <div className="flex h-full">
-      <nav className="flex w-64 shrink-0 flex-col border-r border-separator bg-surface px-3 py-4">
+    <div className="flex h-full print:block print:h-auto">
+      <nav className="flex w-64 shrink-0 flex-col border-r border-separator bg-surface px-3 py-4 print:hidden">
         <div className="flex items-center gap-2.5 px-3 pb-5">
           <div className="grid size-8 place-items-center rounded-lg bg-accent text-accent-foreground">
             <Sparkle className="size-4.5" strokeWidth={2.5} />
@@ -184,7 +198,20 @@ export function AppShell() {
         <NavSection items={MAIN_NAV} />
         <NavSection title="Administration" items={adminNav} />
 
-        <div className="mt-auto border-t border-separator pt-3">
+        {update && (
+          <button
+            type="button"
+            onClick={() => navigate("/settings")}
+            className="mx-1 mt-auto mb-3 flex items-center gap-2 rounded-lg bg-accent-soft px-3 py-2 text-left text-sm text-accent-soft-foreground hover:opacity-90"
+          >
+            <ArrowDownCircle className="size-4 shrink-0" />
+            <span>
+              Version {update.version} is available
+              <span className="block text-xs opacity-80">Open Settings to install it</span>
+            </span>
+          </button>
+        )}
+        <div className={`${update ? "" : "mt-auto "}border-t border-separator pt-3`}>
           <UserPanel />
         </div>
         <div className="flex items-center gap-1">
@@ -203,8 +230,8 @@ export function AppShell() {
         </div>
       </nav>
 
-      <main className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-7xl px-8 py-7">
+      <main className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
+        <div className="mx-auto max-w-7xl px-8 py-7 print:max-w-none print:p-0">
           <Outlet />
         </div>
       </main>

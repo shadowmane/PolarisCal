@@ -208,6 +208,41 @@ both audit trails (`Data copied out` / `Data copied in`). The copy doesn't switc
 the dialog offers to switch this one, and a shared settings file switches everyone. Attached files
 stay where they are, since the database stores paths relative to the attachments folder.
 
+## Reports and labels
+
+**Reports** (everyone can view them) are built in the UI from the same data the screens use
+(`src/lib/reports.ts`), so a report on screen, on paper, and in Excel always match:
+
+* **Due and overdue**: items overdue or due within a window (overdue only, 30/60/90 days, a year),
+  filterable by location, department, and owner, soonest first with days left. Items whose status
+  doesn't track due dates are left out.
+* **Out of tolerance**: calibrations in a date range where the item arrived out of tolerance or
+  inoperative, with how it was returned, for impact assessments.
+* **Instrument register**: every item with its identity, assignment, status, and schedule.
+* **Calibration history**: one item's calibrations (from its page, "Print or export").
+
+**Export to Excel** writes a real `.xlsx` (via `rust_xlsxwriter`): dates as Excel dates, money as
+numbers, a frozen header row with filters, and a line saying what was filtered and when.
+**Print or save PDF** uses the Windows print dialog; print styles hide the app and switch wide
+reports to landscape.
+
+**Calibration labels** print each item's tag, last calibration date, who calibrated it (from the
+latest calibration record), and due date, on Letter 30-up (Avery 5160 size), Letter 10-up (5163),
+A4 14-up (L7163), or one label per page for label printers. A part-used sheet can be reused by
+skipping its used positions.
+
+## Installers and updates
+
+`npm run tauri build` produces a per-machine `.msi` for IT deployment and a per-user NSIS `.exe`.
+Pushing a `v*` tag runs the **Release** workflow, which builds both plus update bundles signed with
+the updater key and a `latest.json`, and attaches them to a draft GitHub release.
+
+The app checks that `latest.json` on GitHub once per launch (unless an administrator turns checks
+off in Settings, for example where IT deploys updates) and in Settings on request. A new version is
+shown in the sidebar and installed from Settings; Tauri verifies its signature against the public
+key in `tauri.conf.json` before installing, then restarts the app. While the repository is private,
+checks report that the update server can't be reached. Installers aren't code-signed yet.
+
 ## Roadmap
 
 1. **Foundation** ✅: Tauri/React/HeroUI shell, core model and rules, `Store` trait, SQLite backend and migrations, read-only screens, CI.
@@ -215,4 +250,4 @@ stay where they are, since the database stores paths relative to the attachments
 3. **Users and audit trail** ✅: logins, roles (Admin / Technician / Viewer), reasons for change, field-level change history, idle auto-lock.
 4. **Certificates** ✅: attach files from the configured share to items and calibration records, with fingerprint checks.
 5. **Remote databases** ✅: PostgreSQL, MySQL/MariaDB, and SQL Server (with Windows login), a connection settings screen, shared settings files, and copying data between databases.
-6. **Release**: reports and exports, then the installer.
+6. **Reports and release** ✅: due/overdue, out-of-tolerance, register, and item-history reports with Excel export and printing; calibration labels; installers, a release workflow, and signed auto-updates.

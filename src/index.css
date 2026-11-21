@@ -26,3 +26,23 @@
     overscroll-behavior: none;
   }
 }
+
+/* Printing (reports and labels): only the page content, black on white, no app chrome. */
+@media print {
+  @page {
+    margin: 12mm;
+  }
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+  .print-plain,
+  .print-plain * {
+    color: #000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+}

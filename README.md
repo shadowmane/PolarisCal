@@ -9,7 +9,7 @@ It runs as a standalone desktop app on a local SQLite database, or shared by a t
 Microsoft SQL Server, or MySQL/MariaDB database. An administrator can copy all data between them
 (for example from the starter SQLite file to a server) from Settings.
 
-> **Status:** early development (Phase 5 of 6). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> **Status:** feature-complete first version (all 6 phases done); not yet released. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for the design, the business rules, and the roadmap.
 
 ## Tech stack
@@ -79,8 +79,28 @@ fails if it is out of date.
 
 ### Build an installer
 
+The build also signs the update files, so it needs the updater's private key:
+
 ```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = "$env:USERPROFILE\.tauri\polariscal-updater.key"
 npm run tauri build
 ```
 
-The `.msi` and NSIS `.exe` installers are written to `target/release/bundle/`.
+The `.msi` (per-machine, for IT deployment) and NSIS `.exe` (per-user, used by auto-update)
+installers are written to `target/release/bundle/`. They aren't code-signed yet, so Windows
+SmartScreen warns on first install.
+
+### Release a version
+
+1. Raise `version` under `[workspace.package]` in `Cargo.toml` (the app takes its version from there).
+2. Commit, then tag and push: `git tag v0.2.0` and `git push origin v0.2.0`.
+3. The **Release** workflow builds the installers and update files and attaches them to a draft
+   GitHub release. Edit its notes and publish it.
+
+Installed copies check `https://github.com/shadowmane/PolarisCal/releases/latest/download/latest.json`
+when they start (an administrator can turn this off in Settings) and offer to install the new
+version. That only works once the repository is public.
+
+The workflow needs the repository secret `TAURI_SIGNING_PRIVATE_KEY` (the contents of
+`polariscal-updater.key`; `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` stays empty). Keep a backup of the
+key: if it's lost, installed copies can't verify new versions and must be reinstalled by hand.

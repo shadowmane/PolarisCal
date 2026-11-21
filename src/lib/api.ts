@@ -24,6 +24,7 @@ import type { CopyReport } from "../bindings/CopyReport";
 import type { DatabaseConfig } from "../bindings/DatabaseConfig";
 import type { DueSummary } from "../bindings/DueSummary";
 import type { ErrorKind } from "../bindings/ErrorKind";
+import type { ExportSheet } from "../bindings/ExportSheet";
 import type { FieldError } from "../bindings/FieldError";
 import type { LookupInput } from "../bindings/LookupInput";
 import type { LookupItem } from "../bindings/LookupItem";
@@ -177,4 +178,7 @@ export const api = {
   testConnection: (choice: ConnectionChoice) => call<ConnectionCheck>("test_connection", { choice }),
   saveConnection: (choice: ConnectionChoice) => call<ConnectionSettings>("save_connection", { choice }),
   copyDatabase: (target: DatabaseConfig) => call<CopyReport>("copy_database", { target }),
+
+  // Reports
+  exportXlsx: (path: string, sheets: ExportSheet[]) => call<void>("export_xlsx", { path, sheets }),
 };

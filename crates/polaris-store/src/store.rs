@@ -1087,6 +1087,7 @@ impl Store for SqlStore {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(AppSettings::DEFAULT_IDLE_LOCK_MINUTES),
             attachments_root: value("attachments_root").filter(|v| !v.is_empty()),
+            update_checks: value("update_checks").is_none_or(|v| v != "false"),
         })
     }
 
@@ -1105,6 +1106,7 @@ impl Store for SqlStore {
                 "attachments_root",
                 settings.attachments_root.clone().unwrap_or_default(),
             ),
+            ("update_checks", settings.update_checks.to_string()),
         ];
         for (key, value) in pairs {
             let exists = tx
@@ -1134,6 +1136,14 @@ impl Store for SqlStore {
                 field: "Attachments folder".into(),
                 old: before.attachments_root.clone(),
                 new: settings.attachments_root.clone(),
+            });
+        }
+        if before.update_checks != settings.update_checks {
+            let yes_no = |b: bool| Some(if b { "Yes" } else { "No" }.to_string());
+            changes.push(FieldChange {
+                field: "Check for updates".into(),
+                old: yes_no(before.update_checks),
+                new: yes_no(settings.update_checks),
             });
         }
         if !changes.is_empty() {
@@ -1709,11 +1719,20 @@ impl Store for SqlStore {
         const SQL: &str = concat!(
             calibration_select!(),
             " WHERE (?1 IS NULL OR r.asset_id = ?1) AND (?2 = TRUE OR r.is_archived = FALSE)
+                AND (?3 IS NULL OR r.cal_date >= ?3) AND (?4 IS NULL OR r.cal_date <= ?4)
               ORDER BY r.cal_date DESC, r.id DESC"
         );
         self.conn()
             .await?
-            .fetch_all(SQL, params![filter.asset_id, filter.include_archived])
+            .fetch_all(
+                SQL,
+                params![
+                    filter.asset_id,
+                    filter.include_archived,
+                    filter.from_date,
+                    filter.to_date
+                ],
+            )
             .await?
             .iter()
             .map(map_calibration)

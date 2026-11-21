@@ -1,6 +1,6 @@
 import { Button, Card, toast, ToggleButton, ToggleButtonGroup, useTheme } from "@heroui/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ArrowRightLeft, Database, FolderOpen, Monitor, Moon, Sun } from "lucide-react";
+import { ArrowDownCircle, ArrowRightLeft, Database, FolderOpen, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import type { AppSettings } from "../bindings/AppSettings";
 import { type ReactNode, useEffect, useState } from "react";
 import { ErrorAlert, Loading, PageHeader } from "../components/common";
@@ -8,7 +8,8 @@ import { ConnectionDialog, CopyDatabaseDialog } from "../components/DatabaseForm
 import { STORE_BACKEND_NAMES } from "../lib/database";
 import { ApiError, api } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
-import { NumberInput, TextInput } from "../components/fields";
+import { NumberInput, SwitchInput, TextInput } from "../components/fields";
+import { checkForUpdate, describeCheckError, installUpdate, useAvailableUpdate } from "../lib/updates";
 import { useAuth } from "../lib/auth";
 import { fieldErrors } from "../lib/forms";
 import { roleMeta } from "../lib/permissions";
@@ -70,6 +71,102 @@ function SecurityCard({ settings, onSaved }: { settings?: AppSettings; onSaved: 
           <p className="text-sm text-muted">
             PolarisCal locks after {idleLockMinutes} minutes without activity. An administrator can change this.
           </p>
+        )}
+      </Card.Content>
+    </Card>
+  );
+}
+
+function UpdatesCard({ version, settings, onSaved }: { version?: string; settings?: AppSettings; onSaved: () => void }) {
+  const { can } = useAuth();
+  const isAdmin = can("admin");
+  const update = useAvailableUpdate();
+  const [status, setStatus] = useState<{ ok: boolean; text: string }>();
+  const [busy, setBusy] = useState<"check" | "install" | "toggle" | null>(null);
+  const [progress, setProgress] = useState<number | null>(null);
+
+  async function check() {
+    setBusy("check");
+    setStatus(undefined);
+    try {
+      const found = await checkForUpdate();
+      setStatus({ ok: true, text: found ? `Version ${found.version} is available.` : "PolarisCal is up to date." });
+    } catch (e) {
+      setStatus({ ok: false, text: describeCheckError(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function install() {
+    if (!update) return;
+    setBusy("install");
+    try {
+      await installUpdate(update, setProgress);
+    } catch (e) {
+      setStatus({ ok: false, text: `The update couldn't be installed: ${e instanceof Error ? e.message : String(e)}` });
+      setBusy(null);
+    }
+  }
+
+  async function toggle(on: boolean) {
+    if (!settings) return;
+    setBusy("toggle");
+    try {
+      await api.updateSettings({ ...settings, update_checks: on });
+      onSaved();
+      toast.success(on ? "Automatic update checks turned on" : "Automatic update checks turned off");
+    } catch (e) {
+      toast.danger(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>Updates</Card.Title>
+        <Card.Description>
+          You're running PolarisCal {version ?? ""}. New versions are signed, so only official releases install.
+        </Card.Description>
+      </Card.Header>
+      <Card.Content className="flex flex-col gap-4">
+        {update && (
+          <div className="rounded-xl border border-separator p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="font-medium">Version {update.version} is available</div>
+                {update.date && <div className="text-xs text-muted">Released {update.date.slice(0, 10)}</div>}
+              </div>
+              <Button isPending={busy === "install"} onPress={() => void install()}>
+                <ArrowDownCircle className="size-4" /> Install and restart
+              </Button>
+            </div>
+            {update.body && <p className="mt-3 text-sm whitespace-pre-line text-muted">{update.body}</p>}
+            {busy === "install" && (
+              <p className="mt-3 text-sm text-muted">
+                {progress == null ? "Downloading…" : progress < 1 ? `Downloading… ${Math.round(progress * 100)}%` : "Installing…"}
+              </p>
+            )}
+          </div>
+        )}
+        {status && (
+          <p className={`text-sm ${status.ok ? "" : "text-danger"}`}>{status.text}</p>
+        )}
+        <div>
+          <Button variant="secondary" isPending={busy === "check"} isDisabled={busy === "install"} onPress={() => void check()}>
+            <RefreshCw className="size-4" /> Check for updates
+          </Button>
+        </div>
+        {isAdmin && settings && (
+          <SwitchInput
+            label="Check for updates automatically"
+            description="Each computer looks for a new version when PolarisCal starts. Turn this off if IT deploys updates instead. Applies to everyone."
+            isSelected={settings.update_checks}
+            isDisabled={busy === "toggle"}
+            onChange={(on) => void toggle(on)}
+          />
         )}
       </Card.Content>
     </Card>
@@ -292,6 +389,7 @@ export function SettingsPage() {
 
         <SecurityCard settings={settings.data} onSaved={settings.reload} />
         <AttachmentsFolderCard settings={settings.data} onSaved={settings.reload} />
+        <UpdatesCard version={data?.version} settings={settings.data} onSaved={settings.reload} />
 
         <Card>
           <Card.Header>
@@ -321,7 +419,6 @@ export function SettingsPage() {
           </Card.Content>
         </Card>
 
-        {data && <p className="text-xs text-muted">PolarisCal version {data.version}</p>}
       </div>
     </>
   );

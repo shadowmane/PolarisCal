@@ -12,4 +12,8 @@ idle_lock_minutes: number,
  * Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where attached
  * files are stored. Attaching files is unavailable until it is set.
  */
-attachments_root: string | null, };
+attachments_root: string | null, 
+/**
+ * Whether PolarisCal checks online for new versions. Turn off where IT deploys updates.
+ */
+update_checks: boolean, };

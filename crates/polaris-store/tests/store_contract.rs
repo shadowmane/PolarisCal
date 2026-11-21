@@ -472,7 +472,8 @@ async fn calibration_records_drive_asset_dates() {
     assert_eq!(
         s.list_calibrations(&CalibrationFilter {
             asset_id: Some(asset.id),
-            include_archived: false
+            include_archived: false,
+            ..Default::default()
         })
         .await
         .unwrap()
@@ -482,12 +483,27 @@ async fn calibration_records_drive_asset_dates() {
     assert_eq!(
         s.list_calibrations(&CalibrationFilter {
             asset_id: Some(asset.id),
-            include_archived: true
+            include_archived: true,
+            ..Default::default()
         })
         .await
         .unwrap()
         .len(),
         2
+    );
+    // a date range keeps only the calibrations inside it (both ends included)
+    let in_range = s
+        .list_calibrations(&CalibrationFilter {
+            include_archived: true,
+            from_date: Some(d(2025, 6, 10)),
+            to_date: Some(d(2025, 12, 31)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        in_range.iter().map(|c| c.cal_date).collect::<Vec<_>>(),
+        [d(2025, 6, 10)]
     );
 
     // editing the interval recomputes next date
@@ -935,6 +951,7 @@ async fn settings_are_validated_and_audited() {
             AppSettings {
                 idle_lock_minutes: 0,
                 attachments_root: None,
+                update_checks: true,
             },
         )
         .await;
@@ -944,6 +961,7 @@ async fn settings_are_validated_and_audited() {
         AppSettings {
             idle_lock_minutes: 30,
             attachments_root: None,
+            update_checks: true,
         },
     )
     .await
@@ -1172,6 +1190,7 @@ async fn attachments_folder_setting_round_trips() {
             AppSettings {
                 idle_lock_minutes: 15,
                 attachments_root: Some(r" \\files\cal ".into()),
+                update_checks: true,
             },
         )
         .await
@@ -1188,6 +1207,7 @@ async fn attachments_folder_setting_round_trips() {
             AppSettings {
                 idle_lock_minutes: 15,
                 attachments_root: Some("relative".into()),
+                update_checks: true,
             },
         )
         .await;
@@ -1199,11 +1219,27 @@ async fn attachments_folder_setting_round_trips() {
         AppSettings {
             idle_lock_minutes: 15,
             attachments_root: None,
+            update_checks: true,
         },
     )
     .await
     .unwrap();
     assert_eq!(s.settings().await.unwrap().attachments_root, None);
+}
+
+#[tokio::test]
+async fn update_checks_default_on_and_can_be_turned_off() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    assert!(s.settings().await.unwrap().update_checks);
+    let mut settings = s.settings().await.unwrap();
+    settings.update_checks = false;
+    s.update_settings(&ctx(), settings).await.unwrap();
+    assert!(!s.settings().await.unwrap().update_checks);
+    let entry = &s.list_audit(&AuditFilter::default()).await.unwrap()[0];
+    assert_eq!(entry.entity, AuditEntity::Settings);
+    assert_eq!(entry.changes[0].field, "Check for updates");
+    assert_eq!(entry.changes[0].new.as_deref(), Some("No"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1254,6 +1290,7 @@ async fn populate(store: &dyn Store) {
             AppSettings {
                 idle_lock_minutes: 30,
                 attachments_root: Some(r"\\server\share\PolarisCal".into()),
+                update_checks: true,
             },
         )
         .await

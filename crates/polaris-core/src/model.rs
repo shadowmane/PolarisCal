@@ -382,6 +382,12 @@ pub struct CalibrationFilter {
     pub asset_id: Option<Id>,
     #[serde(default)]
     pub include_archived: bool,
+    /// Only calibrations on or after this date.
+    #[serde(default)]
+    pub from_date: Option<NaiveDate>,
+    /// Only calibrations on or before this date.
+    #[serde(default)]
+    pub to_date: Option<NaiveDate>,
 }
 
 /// An entry in one of the admin-managed pick lists.
@@ -488,6 +494,13 @@ pub struct AppSettings {
     /// Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where attached
     /// files are stored. Attaching files is unavailable until it is set.
     pub attachments_root: Option<String>,
+    /// Whether PolarisCal checks online for new versions. Turn off where IT deploys updates.
+    #[serde(default = "default_true")]
+    pub update_checks: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl AppSettings {
@@ -531,6 +544,7 @@ impl Default for AppSettings {
         Self {
             idle_lock_minutes: Self::DEFAULT_IDLE_LOCK_MINUTES,
             attachments_root: None,
+            update_checks: true,
         }
     }
 }
@@ -618,6 +632,7 @@ mod tests {
         let mut s = AppSettings {
             idle_lock_minutes: 15,
             attachments_root: Some("   ".into()),
+            update_checks: true,
         };
         s.normalize().unwrap();
         assert_eq!(s.attachments_root, None, "blank means unset");
@@ -626,6 +641,7 @@ mod tests {
             let mut s = AppSettings {
                 idle_lock_minutes: 15,
                 attachments_root: Some(ok.into()),
+                update_checks: true,
             };
             assert!(s.normalize().is_ok(), "{ok}");
         }
@@ -633,6 +649,7 @@ mod tests {
             let mut s = AppSettings {
                 idle_lock_minutes: 15,
                 attachments_root: Some(bad.into()),
+                update_checks: true,
             };
             assert!(
                 matches!(s.normalize(), Err(Error::Validation(ref e)) if e[0].field == "attachments_root"),
@@ -642,6 +659,7 @@ mod tests {
         let mut s = AppSettings {
             idle_lock_minutes: 0,
             attachments_root: None,
+            update_checks: true,
         };
         assert!(s.normalize().is_err());
     }

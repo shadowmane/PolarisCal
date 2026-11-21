@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod connection;
+mod export;
 mod files;
 mod state;
 
@@ -13,6 +14,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // POLARISCAL_HOME points config and data at another folder, so test
             // and demo runs never touch the real database in %APPDATA%.
@@ -67,6 +70,7 @@ pub fn run() {
             connection::test_connection,
             connection::save_connection,
             connection::copy_database,
+            export::export_xlsx,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PolarisCal");

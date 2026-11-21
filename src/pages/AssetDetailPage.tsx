@@ -1,5 +1,5 @@
 import { Alert, Button, Card, Chip, Table, toast } from "@heroui/react";
-import { ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Paperclip, Pencil, Plus } from "lucide-react";
+import { ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Paperclip, Pencil, Plus, Printer } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { Asset } from "../bindings/Asset";
@@ -110,6 +110,7 @@ function HistoryCard({
   const [showArchived, setShowArchived] = useState(false);
   const { can } = useAuth();
   const canEdit = can("edit_records");
+  const navigate = useNavigate();
   const records = useAsync(
     () => api.listCalibrations({ asset_id: asset.id, include_archived: showArchived }),
     [asset.id, showArchived, version],
@@ -127,6 +128,9 @@ function HistoryCard({
         </div>
         <div className="flex items-center gap-4">
           <ToggleSwitch label="Show archived" isSelected={showArchived} onChange={setShowArchived} />
+          <Button size="sm" variant="ghost" onPress={() => navigate(`/reports/history/${asset.id}`)}>
+            <Printer className="size-4" /> Print or export
+          </Button>
           {!asset.is_archived && canEdit && (
             <Button size="sm" variant="secondary" onPress={onAdd}>
               <Plus className="size-4" /> Record calibration
