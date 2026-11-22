@@ -16,6 +16,8 @@ export function AssetsPage() {
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<KindTab>("all");
   const [showArchived, setShowArchived] = useState(false);
+  // Retired items are no longer calibrated; they're listed unless this is turned off.
+  const [showRetired, setShowRetired] = useState(true);
   const navigate = useNavigate();
   const { can } = useAuth();
   const query = useDeferredValue(search);
@@ -28,6 +30,8 @@ export function AssetsPage() {
       }),
     [query, kind, showArchived],
   );
+  const rows = data?.filter((a) => showRetired || a.status_role !== "retired");
+  const hiddenRetired = (data?.length ?? 0) - (rows?.length ?? 0);
 
   return (
     <>
@@ -69,6 +73,7 @@ export function AssetsPage() {
         </Tabs>
 
         <div className="flex items-center gap-4">
+        <ToggleSwitch label="Show retired" isSelected={showRetired} onChange={setShowRetired} />
         <ToggleSwitch label="Show archived" isSelected={showArchived} onChange={setShowArchived} />
         <SearchField value={search} onChange={setSearch} aria-label="Search" className="w-80">
           <SearchField.Group>
@@ -82,7 +87,7 @@ export function AssetsPage() {
 
       {error && <ErrorAlert error={error} onRetry={reload} />}
       {loading && !data && <Loading />}
-      {data && (
+      {rows && (
         <Table>
           <Table.ScrollContainer>
             <Table.Content aria-label="Instruments and systems" onRowAction={(key) => navigate(`/assets/${key}`)}>
@@ -99,13 +104,15 @@ export function AssetsPage() {
                 <Table.Column>Next due</Table.Column>
               </Table.Header>
               <Table.Body
-                items={data}
+                items={rows}
                 renderEmptyState={() => (
                   <EmptyNote
                     icon={<Gauge className="size-5" />}
                     title={query ? "No matches" : "No instruments or systems yet"}
                   >
-                    {query
+                    {hiddenRetired > 0
+                      ? `${hiddenRetired} retired ${hiddenRetired === 1 ? "item is" : "items are"} hidden. Turn on Show retired to see ${hiddenRetired === 1 ? "it" : "them"}.`
+                      : query
                       ? `Nothing matches “${query}”.`
                       : can("edit_records")
                         ? "Use New Instrument or New System to add the first one."
@@ -130,10 +137,18 @@ export function AssetsPage() {
                     <Table.Cell>{a.serial_number ?? EMPTY}</Table.Cell>
                     <Table.Cell>{a.location_name ?? EMPTY}</Table.Cell>
                     <Table.Cell>{a.department_name ?? EMPTY}</Table.Cell>
-                    <Table.Cell>{a.status_name}</Table.Cell>
+                    <Table.Cell>
+                      <span className={a.status_role === "retired" ? "font-medium text-danger" : undefined}>
+                        {a.status_name}
+                      </span>
+                    </Table.Cell>
                     <Table.Cell>{formatInterval(a.cal_interval)}</Table.Cell>
                     <Table.Cell>{formatDate(a.last_cal_date)}</Table.Cell>
                     <Table.Cell>
+                      {/* Retired items aren't calibrated any more, so they have nothing due. */}
+                      {a.status_role === "retired" ? (
+                        EMPTY
+                      ) : (
                       <div className="flex items-center gap-2">
                         <span>{formatDate(a.next_cal_date)}</span>
                         {(a.due_status === "overdue" || a.due_status === "extended" || a.due_status === "due_soon") && (
@@ -142,6 +157,7 @@ export function AssetsPage() {
                           </StatusChip>
                         )}
                       </div>
+                      )}
                     </Table.Cell>
                   </Table.Row>
                 )}

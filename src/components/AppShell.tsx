@@ -28,6 +28,7 @@ import { setCurrencySymbol } from "../lib/currency";
 import { setDateFormat } from "../lib/dates";
 import { setNoticeDismissed, useAvailableUpdate, useNoticeDismissed } from "../lib/updates";
 import { useAsync } from "../lib/useAsync";
+import { AboutDialog } from "./AboutDialog";
 import { ChangePasswordForm } from "./AuthScreens";
 
 interface NavItem {
@@ -187,6 +188,7 @@ export function AppShell() {
   const update = useAvailableUpdate();
   const noticeDismissed = useNoticeDismissed();
   const version = useAsync(() => getVersion(), []);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   // The organization's currency and date format, for every money and date display. Pages
   // wait for them so their dates don't change format a moment after they appear.
@@ -205,7 +207,13 @@ export function AppShell() {
   return (
     <div className="flex h-full print:block print:h-auto">
       <nav className="flex w-64 shrink-0 flex-col border-r border-separator bg-surface px-3 py-4 print:hidden">
-        <div className="flex items-center gap-2.5 px-3 pb-4">
+        <button
+          type="button"
+          onClick={() => setAboutOpen(true)}
+          aria-label="About PolarisCal"
+          title="About PolarisCal"
+          className="mb-4 flex items-center gap-2.5 rounded-lg px-3 py-1 text-left outline-none hover:bg-default focus-visible:ring-2 focus-visible:ring-accent"
+        >
           <div className="grid size-8 place-items-center rounded-lg bg-accent text-accent-foreground">
             <Sparkle className="size-4.5" strokeWidth={2.5} />
           </div>
@@ -213,7 +221,8 @@ export function AppShell() {
             <div className="text-[15px] font-semibold tracking-tight">PolarisCal</div>
             <div className="text-[11px] text-muted">{version.data ? `Version ${version.data}` : " "}</div>
           </div>
-        </div>
+        </button>
+        <AboutDialog isOpen={aboutOpen} onOpenChange={setAboutOpen} version={version.data ?? undefined} />
 
         {/* Where the data lives and the theme, at a glance. */}
         <div className="mb-3 flex items-center gap-1 border-b border-separator pb-3">
