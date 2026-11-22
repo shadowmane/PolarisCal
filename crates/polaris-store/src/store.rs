@@ -20,8 +20,8 @@ use polaris_core::certificate::{
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, AssetKind, Attachment, AttachmentFilter,
     AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationFilter, CalibrationInput,
-    CalibrationRecord, ConditionReturned, LookupInput, LookupItem, LookupKind, NewAttachment, Role,
-    StatusRole, StoreInfo,
+    CalibrationRecord, ConditionReturned, LastCost, LookupInput, LookupItem, LookupKind,
+    NewAttachment, Role, StatusRole, StoreInfo,
 };
 use polaris_core::schedule::{
     add_interval, apply_extension, derive_dates, due_status_with_extension,
@@ -2267,6 +2267,39 @@ impl Store for SqlStore {
             .iter()
             .map(map_calibration)
             .collect()
+    }
+
+    async fn last_cost(
+        &self,
+        provider_id: Id,
+        service_type_id: Id,
+        asset_id: Id,
+    ) -> Result<Option<LastCost>> {
+        let sql = format!(
+            "SELECT r.cost_cents, r.cal_date, a.asset_tag
+             FROM calibration_records r
+             JOIN assets a  ON a.id = r.asset_id
+             JOIN assets me ON me.id = ?3
+             WHERE r.provider_id = ?1 AND r.service_type_id = ?2
+               AND r.cost_cents IS NOT NULL AND r.is_archived = FALSE
+               AND a.manufacturer_id = me.manufacturer_id
+               AND LOWER(a.model_number) = LOWER(me.model_number)
+             ORDER BY r.cal_date DESC, r.id DESC
+             {}",
+            self.dialect().limit("1")
+        );
+        self.conn()
+            .await?
+            .fetch_optional(&sql, params![provider_id, service_type_id, asset_id])
+            .await?
+            .map(|r| {
+                Ok(LastCost {
+                    cost_cents: r.get("cost_cents")?,
+                    cal_date: r.get("cal_date")?,
+                    asset_tag: r.get("asset_tag")?,
+                })
+            })
+            .transpose()
     }
 
     async fn get_calibration(&self, id: Id) -> Result<CalibrationRecord> {

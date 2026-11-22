@@ -244,7 +244,7 @@ export function CertificateView({
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "8.5pt" }}>
             <thead>
               <tr style={{ color: accent, textAlign: "left" }}>
-                {["Asset no.", "Description", "Model", "Serial", "Calibration due"].map((h) => (
+                {["Asset no.", "Description", "Model", "Serial", "Calibration Valid Until"].map((h) => (
                   <th key={h} style={{ padding: "0.03in 0.05in", borderBottom: "1px solid #bbb", fontWeight: 700 }}>
                     {h}
                   </th>

@@ -14,8 +14,8 @@ use polaris_core::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
 use polaris_core::auth::{NewUser, User, UserUpdate, hash_password, verify_password};
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentCategory, AttachmentFilter,
-    CalibrationFilter, CalibrationInput, CalibrationRecord, LookupInput, LookupItem, LookupKind,
-    NewAttachment, StoreInfo,
+    CalibrationFilter, CalibrationInput, CalibrationRecord, LastCost, LookupInput, LookupItem,
+    LookupKind, NewAttachment, StoreInfo,
 };
 use polaris_core::schedule::DueSummary;
 use polaris_core::{Error, FieldError, Id, Store};
@@ -610,6 +610,20 @@ pub async fn list_calibrations(
 pub async fn get_calibration(state: State<'_, AppState>, id: Id) -> CmdResult<CalibrationRecord> {
     let (store, _) = require(&state, Need::SignedIn).await?;
     Ok(store.get_calibration(id).await?)
+}
+
+/// What the provider last charged for this service on the same make and model.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn last_cost(
+    state: State<'_, AppState>,
+    provider_id: Id,
+    service_type_id: Id,
+    asset_id: Id,
+) -> CmdResult<Option<LastCost>> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    Ok(store
+        .last_cost(provider_id, service_type_id, asset_id)
+        .await?)
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -9,8 +9,8 @@ use crate::certificate::{
 use crate::model::AuditAction;
 use crate::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentFilter, CalibrationFilter,
-    CalibrationInput, CalibrationRecord, LookupInput, LookupItem, LookupKind, NewAttachment,
-    StoreInfo,
+    CalibrationInput, CalibrationRecord, LastCost, LookupInput, LookupItem, LookupKind,
+    NewAttachment, StoreInfo,
 };
 use crate::transfer::{DataSet, TableCount};
 use crate::{Id, Result};
@@ -153,6 +153,16 @@ pub trait Store: Send + Sync {
     async fn list_calibrations(&self, filter: &CalibrationFilter)
     -> Result<Vec<CalibrationRecord>>;
     async fn get_calibration(&self, id: Id) -> Result<CalibrationRecord>;
+    /// The cost on the most recent (unarchived) service record by `provider_id` of
+    /// `service_type_id` for an item with the same manufacturer and model number as
+    /// `asset_id` (model compared ignoring case). None if there is none, or the item has
+    /// no manufacturer or model number.
+    async fn last_cost(
+        &self,
+        provider_id: Id,
+        service_type_id: Id,
+        asset_id: Id,
+    ) -> Result<Option<LastCost>>;
     async fn create_calibration(
         &self,
         ctx: &WriteContext,

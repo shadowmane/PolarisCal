@@ -33,6 +33,7 @@ import type { DueSummary } from "../bindings/DueSummary";
 import type { ErrorKind } from "../bindings/ErrorKind";
 import type { ExportSheet } from "../bindings/ExportSheet";
 import type { FieldError } from "../bindings/FieldError";
+import type { LastCost } from "../bindings/LastCost";
 import type { LookupInput } from "../bindings/LookupInput";
 import type { LookupItem } from "../bindings/LookupItem";
 import type { LookupKind } from "../bindings/LookupKind";
@@ -136,6 +137,9 @@ export const api = {
       filter: { asset_id: null, include_archived: false, ...filter },
     }),
   getCalibration: (id: number) => call<CalibrationRecord>("get_calibration", { id }),
+  /** What a provider last charged for a service type on the same make and model as the item. */
+  lastCost: (providerId: number, serviceTypeId: number, assetId: number) =>
+    call<LastCost | null>("last_cost", { provider_id: providerId, service_type_id: serviceTypeId, asset_id: assetId }),
   createCalibration: (input: CalibrationInput) =>
     call<CalibrationRecord>("create_calibration", { input }),
   updateCalibration: (id: number, expectedVersion: number, input: CalibrationInput, reason: string) =>

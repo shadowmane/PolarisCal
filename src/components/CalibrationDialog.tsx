@@ -1,6 +1,6 @@
 import { Alert, AlertDialog, Button, ComboBox, FieldError, Input, Label, ListBox, Modal, toast } from "@heroui/react";
 import { today, getLocalTimeZone } from "@internationalized/date";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CalibratedBy } from "../bindings/CalibratedBy";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { ConditionReceived } from "../bindings/ConditionReceived";
@@ -110,6 +110,10 @@ export function CalibrationDialog({
   const [prompt, setPrompt] = useState<OutcomePrompt | null>(null);
   const [reason, setReason] = useState("");
   const [pendingFiles, setPendingFiles] = useState<string[]>([]);
+  // A new record's cost is filled in until someone types one: 0 for an in-house provider, or
+  // what an outside provider last charged for this service on the same make and model.
+  const costIsAuto = useRef(true);
+  const [costHint, setCostHint] = useState<string>();
   const settings = useAsync(() => api.getSettings(), [isOpen]);
   const folderSet = !!settings.data?.attachments_root;
 
@@ -129,7 +133,45 @@ export function CalibrationDialog({
     setReason("");
     setPendingFiles([]);
     setPrompt(null);
+    costIsAuto.current = !record;
+    setCostHint(undefined);
   }, [isOpen, record, asset]);
+
+  useEffect(() => {
+    if (!isOpen || record || !costIsAuto.current) return;
+    let current = true;
+    const fill = (cost: number | null, hint?: string) => {
+      if (!current || !costIsAuto.current) return;
+      setForm((f) => (f.cost === cost ? f : { ...f, cost }));
+      setCostHint(hint);
+    };
+    const provider =
+      form.calibrated_by === "provider"
+        ? lookups.data?.provider.find((p) => p.id === form.calibrated_by_id)
+        : undefined;
+    if (!provider || form.service_type_id == null) {
+      fill(null);
+    } else if (provider.is_internal) {
+      fill(0, "In-house work isn't charged.");
+    } else if (form.asset_id == null) {
+      fill(null);
+    } else {
+      api
+        .lastCost(provider.id, form.service_type_id, form.asset_id)
+        .then((last) =>
+          last
+            ? fill(
+                last.cost_cents / 100,
+                `What ${provider.name} last charged for this model (${last.asset_tag}, ${formatDate(last.cal_date)}).`,
+              )
+            : fill(null),
+        )
+        .catch(() => fill(null));
+    }
+    return () => {
+      current = false;
+    };
+  }, [isOpen, record, form.calibrated_by, form.calibrated_by_id, form.service_type_id, form.asset_id, lookups.data]);
 
   // A new record starts as the first type that counts as a calibration (normally "Calibration").
   useEffect(() => {
@@ -433,7 +475,15 @@ export function CalibrationDialog({
                   <MoneyInput
                     label="Cost"
                     value={form.cost}
-                    onChange={(v) => set("cost", v)}
+                    onChange={(v) => {
+                      // A typed cost stays put; clearing the field lets it be filled in again.
+                      if (v !== form.cost) {
+                        costIsAuto.current = v == null;
+                        setCostHint(undefined);
+                      }
+                      set("cost", v);
+                    }}
+                    description={costHint}
                     error={errors.cost_cents}
                     isDisabled={isExtension}
                   />

@@ -1119,6 +1119,77 @@ async fn repairs_remember_the_status_before_a_failure() {
 }
 
 #[tokio::test]
+async fn last_cost_follows_provider_service_and_model() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let other_vendor = s
+        .create_lookup(&ctx(), LookupKind::Provider, lookup("Second Lab"))
+        .await
+        .unwrap()
+        .id;
+    let maker = s
+        .create_lookup(&ctx(), LookupKind::Manufacturer, lookup("Agilent"))
+        .await
+        .unwrap()
+        .id;
+    let item = |tag: &'static str, model: &'static str| async move {
+        let mut input = asset_input(s, tag, AssetKind::Instrument).await;
+        input.manufacturer_id = Some(maker);
+        input.model_number = Some(model.into());
+        s.create_asset(&ctx(), input).await.unwrap().id
+    };
+    let first = item("DMM-A", "34401A").await;
+    let second = item("DMM-B", "34401a").await;
+    let different = item("DMM-C", "34461A").await;
+
+    assert_eq!(
+        s.last_cost(vendor, CALIBRATION, second).await.unwrap(),
+        None
+    );
+
+    let mut record = cal(first, vendor, d(2026, 1, 10));
+    record.cost_cents = Some(12_500);
+    s.create_calibration(&ctx(), record).await.unwrap();
+    let mut record = cal(first, other_vendor, d(2026, 2, 10));
+    record.cost_cents = Some(9_900);
+    s.create_calibration(&ctx(), record).await.unwrap();
+
+    // Same maker and model (any case), same provider and service type.
+    let last = s
+        .last_cost(vendor, CALIBRATION, second)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (last.cost_cents, last.asset_tag.as_str()),
+        (12_500, "DMM-A")
+    );
+    assert_eq!(
+        s.last_cost(vendor, CALIBRATION, different).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        s.last_cost(other_vendor, CALIBRATION, second)
+            .await
+            .unwrap()
+            .map(|c| c.cost_cents),
+        Some(9_900)
+    );
+
+    // A newer price wins from then on.
+    let mut record = cal(second, vendor, d(2026, 3, 1));
+    record.cost_cents = Some(14_000);
+    s.create_calibration(&ctx(), record).await.unwrap();
+    let last = s
+        .last_cost(vendor, CALIBRATION, first)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((last.cost_cents, last.cal_date), (14_000, d(2026, 3, 1)));
+}
+
+#[tokio::test]
 async fn calibration_validation() {
     let h = harness().await;
     let s = h.store.as_ref();

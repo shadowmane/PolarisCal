@@ -58,6 +58,7 @@ pub fn run() {
             commands::set_asset_archived,
             commands::list_calibrations,
             commands::get_calibration,
+            commands::last_cost,
             commands::create_calibration,
             commands::update_calibration,
             commands::set_calibration_archived,

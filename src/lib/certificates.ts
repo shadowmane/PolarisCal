@@ -24,6 +24,13 @@ export function nextCertificateNumber(template: CertificateTemplate, today = iso
   return formatCertificateNumber(template.number_pattern, template.number_digits, template.next_number, today);
 }
 
+/** "Last calibrated Nov 22, 2025 · Next due Nov 22, 2026", for picking items. */
+export function calibrationDatesText(lastCal: string | null, nextDue: string | null, format: (iso: string) => string): string {
+  const parts = [lastCal ? `Last calibrated ${format(lastCal)}` : "Never calibrated"];
+  if (nextDue) parts.push(`Next due ${format(nextDue)}`);
+  return parts.join(" · ");
+}
+
 export const temperatureSymbol: Record<TemperatureUnit, string> = { celsius: "°C", fahrenheit: "°F" };
 
 /** Mirrors `add_interval` in Rust (months clamp to the month's last day). */

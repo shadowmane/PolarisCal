@@ -3,8 +3,19 @@
 
 import { Button, ComboBox, Input, Label, ListBox, toast, ToggleButton, ToggleButtonGroup } from "@heroui/react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { Building2, FileCheck2, History, Paperclip, Plus, Signature, Trash2, Warehouse, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  Building2,
+  FileCheck2,
+  GripVertical,
+  History,
+  Paperclip,
+  Plus,
+  Signature,
+  Trash2,
+  Warehouse,
+  X,
+} from "lucide-react";
+import { type PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import type { Asset } from "../bindings/Asset";
 import type { CertificateDetails } from "../bindings/CertificateDetails";
@@ -18,8 +29,14 @@ import { ErrorAlert, Loading, PageHeader } from "../components/common";
 import { CheckboxInput, DateInput, SelectInput, TextAreaInput, TextInput } from "../components/fields";
 import { ApiError, api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { addInterval, emptyCertificateDetails, nextCertificateNumber, temperatureSymbol } from "../lib/certificates";
-import { conditionReceivedMeta, conditionReturnedMeta } from "../lib/format";
+import {
+  addInterval,
+  calibrationDatesText,
+  emptyCertificateDetails,
+  nextCertificateNumber,
+  temperatureSymbol,
+} from "../lib/certificates";
+import { conditionReceivedMeta, conditionReturnedMeta, formatDate } from "../lib/format";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
 import { lookupOptions, useLookups } from "../lib/lookups";
 import { isoToday } from "../lib/reports";
@@ -88,6 +105,9 @@ function ItemComboBox({
                 <span className="font-medium">{a.asset_tag}</span>
                 <span className="text-xs text-muted">
                   {[a.description, a.manufacturer_name, a.model_number].filter(Boolean).join(" · ")}
+                </span>
+                <span className="text-xs text-muted">
+                  {calibrationDatesText(a.last_cal_date, a.next_cal_date, formatDate)}
                 </span>
               </div>
               <ListBox.ItemIndicator />
@@ -207,6 +227,10 @@ export function GenerateCertificatePage() {
   // Saved signatures by user, fetched as signers are chosen, for the preview.
   const [signatures, setSignatures] = useState<Record<number, string | null>>({});
   const [testData, setTestData] = useState<string | null>(null);
+  // Reordering equipment: the row being dragged, and the rows and handles to measure and focus.
+  const [dragging, setDragging] = useState<number | null>(null);
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const gripRefs = useRef<(HTMLButtonElement | null)[]>([]);
   // Internal certificates can add a service record to the item in the same step.
   const lookups = useLookups();
   const [record, setRecord] = useState<{ on: boolean; serviceTypeId: number | null; providerId: number | null }>({
@@ -285,6 +309,40 @@ export function GenerateCertificatePage() {
       next_cal_date: a.cal_interval ? addInterval(f.cal_date, a.cal_interval) : f.next_cal_date,
     }));
     setErrors({});
+  }
+
+  function moveEquipment(from: number, to: number) {
+    setForm((f) => {
+      const list = [...f.equipment];
+      const [moved] = list.splice(from, 1);
+      list.splice(to, 0, moved);
+      return { ...f, equipment: list };
+    });
+  }
+
+  /** While dragging by the handle, moves the row past any neighbor whose middle the pointer crosses. */
+  function dragOver(e: PointerEvent) {
+    if (dragging == null) return;
+    let target = dragging;
+    rowRefs.current.forEach((row, i) => {
+      if (!row) return;
+      const { top, height } = row.getBoundingClientRect();
+      const middle = top + height / 2;
+      if (i < dragging && e.clientY < middle) target = Math.min(target, i);
+      if (i > dragging && e.clientY > middle) target = Math.max(target, i);
+    });
+    if (target !== dragging) {
+      moveEquipment(dragging, target);
+      setDragging(target);
+    }
+  }
+
+  /** The arrow keys move the focused row's handle up or down, keeping focus on it. */
+  function nudge(index: number, by: number) {
+    const to = index + by;
+    if (to < 0 || to >= form.equipment.length) return;
+    moveEquipment(index, to);
+    requestAnimationFrame(() => gripRefs.current[to]?.focus());
   }
 
   function setEquipment(index: number, patch: Partial<CertificateEquipment>) {
@@ -580,11 +638,49 @@ export function GenerateCertificatePage() {
               <h2 className="text-sm font-semibold">Equipment used</h2>
               <p className="text-xs text-muted">The standards this unit was calibrated against.</p>
             </div>
+            {form.equipment.length > 1 && (
+              <p className="-mt-1 text-xs text-muted">Drag a row by its handle to change the order.</p>
+            )}
             {form.equipment.map((e, i) => (
               <div
                 key={i}
-                className="grid grid-cols-2 items-end gap-2 rounded-xl border border-separator p-3 md:grid-cols-[1fr_2fr_1fr_1fr]"
+                ref={(el) => {
+                  rowRefs.current[i] = el;
+                }}
+                className={`flex gap-2 rounded-xl border p-3 transition-shadow ${
+                  dragging === i ? "border-accent shadow-lg ring-2 ring-accent/40" : "border-separator"
+                }`}
               >
+                {form.equipment.length > 1 && (
+                  <button
+                    type="button"
+                    ref={(el) => {
+                      gripRefs.current[i] = el;
+                    }}
+                    aria-label={`Move ${e.asset_tag || e.description || `row ${i + 1}`}: drag, or press the up and down arrow keys`}
+                    title="Drag to reorder"
+                    className={`-ml-1 flex w-6 shrink-0 touch-none items-center justify-center rounded-md text-muted hover:bg-default hover:text-foreground focus-visible:ring-2 focus-visible:ring-accent focus-visible:outline-none ${
+                      dragging === i ? "cursor-grabbing" : "cursor-grab"
+                    }`}
+                    onPointerDown={(ev) => {
+                      ev.preventDefault();
+                      ev.currentTarget.setPointerCapture(ev.pointerId);
+                      setDragging(i);
+                    }}
+                    onPointerMove={dragOver}
+                    onPointerUp={() => setDragging(null)}
+                    onPointerCancel={() => setDragging(null)}
+                    onKeyDown={(ev) => {
+                      if (ev.key === "ArrowUp" || ev.key === "ArrowDown") {
+                        ev.preventDefault();
+                        nudge(i, ev.key === "ArrowUp" ? -1 : 1);
+                      }
+                    }}
+                  >
+                    <GripVertical className="size-4" />
+                  </button>
+                )}
+                <div className="grid flex-1 grid-cols-2 items-end gap-2 md:grid-cols-[1fr_2fr_1fr_1fr]">
                 <TextInput label="Asset no." value={e.asset_tag} onChange={(v) => setEquipment(i, { asset_tag: v })} />
                 <TextInput
                   label="Description"
@@ -598,7 +694,7 @@ export function GenerateCertificatePage() {
                   onChange={(v) => setEquipment(i, { serial_number: v })}
                 />
                 <DateInput
-                  label="Calibration due"
+                  label="Calibration valid until"
                   value={e.cal_due}
                   onChange={(v) => setEquipment(i, { cal_due: v })}
                   className="col-span-2 md:col-span-2"
@@ -611,6 +707,7 @@ export function GenerateCertificatePage() {
                   >
                     <Trash2 className="size-4" /> Remove
                   </Button>
+                </div>
                 </div>
               </div>
             ))}

@@ -456,6 +456,17 @@ impl CalibrationInput {
     }
 }
 
+/// What a provider last charged for a service on the same make and model, offered as the
+/// cost of a new service record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct LastCost {
+    pub cost_cents: i64,
+    pub cal_date: NaiveDate,
+    /// The item that service record belongs to.
+    pub asset_tag: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CalibrationFilter {
