@@ -13,4 +13,8 @@ title: string, subtitle: string | null, columns: Array<ExportColumn>, rows: Arra
 /**
  * Shown before money values; "$" when absent.
  */
-currency_symbol: string | null, };
+currency_symbol: string | null, 
+/**
+ * The organization's date format (a Settings `date_format` id); ISO 8601 when absent.
+ */
+date_format: string | null, };

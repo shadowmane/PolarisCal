@@ -20,4 +20,9 @@ update_checks: boolean,
 /**
  * Shown before amounts of money throughout the app, e.g. "$" or "€".
  */
-currency_symbol: string, };
+currency_symbol: string, 
+/**
+ * How dates are shown throughout the app: one of [`AppSettings::DATE_FORMATS`].
+ * "system" follows each PC's Windows region setting.
+ */
+date_format: string, };

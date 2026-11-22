@@ -1,4 +1,5 @@
 import { formatMoney } from "./currency";
+import { dateFormat, formatYmd } from "./dates";
 import type { AttachmentCategory } from "../bindings/AttachmentCategory";
 import type { AuditAction } from "../bindings/AuditAction";
 import type { AuditEntity } from "../bindings/AuditEntity";
@@ -10,13 +11,11 @@ import type { LookupKind } from "../bindings/LookupKind";
 
 export const EMPTY = "—";
 
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
-
-/** Formats a 'YYYY-MM-DD' date without shifting it through UTC. */
+/** Formats a 'YYYY-MM-DD' date in the organization's date format, without shifting it through UTC. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return EMPTY;
   const [y, m, d] = iso.split("-").map(Number);
-  return dateFormat.format(new Date(y, m - 1, d));
+  return formatYmd(y, m, d, dateFormat());
 }
 
 /** Money in the organization's currency (Settings). Components showing it call `useCurrencySymbol`. */
@@ -75,12 +74,16 @@ export const LOOKUP_KINDS: LookupKind[] = [
 ];
 
 const dateTimeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const timeFormat = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
-/** Formats an RFC 3339 timestamp in local time. */
+/** Formats an RFC 3339 timestamp in local time: the organization's date format, the PC's time format. */
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return EMPTY;
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : dateTimeFormat.format(d);
+  if (Number.isNaN(d.getTime())) return iso;
+  const format = dateFormat();
+  if (format === "system") return dateTimeFormat.format(d);
+  return `${formatYmd(d.getFullYear(), d.getMonth() + 1, d.getDate(), format)}, ${timeFormat.format(d)}`;
 }
 
 export const auditActionMeta: Record<AuditAction, { label: string; color: ChipColor }> = {

@@ -1551,6 +1551,7 @@ async fn settings_are_validated_and_audited() {
                 attachments_root: None,
                 update_checks: true,
                 currency_symbol: "$".into(),
+                date_format: "system".into(),
             },
         )
         .await;
@@ -1562,6 +1563,7 @@ async fn settings_are_validated_and_audited() {
             attachments_root: None,
             update_checks: true,
             currency_symbol: "$".into(),
+            date_format: "system".into(),
         },
     )
     .await
@@ -1787,6 +1789,7 @@ async fn attachments_folder_setting_round_trips() {
                 attachments_root: Some(r" \\files\cal ".into()),
                 update_checks: true,
                 currency_symbol: "$".into(),
+                date_format: "system".into(),
             },
         )
         .await
@@ -1805,6 +1808,7 @@ async fn attachments_folder_setting_round_trips() {
                 attachments_root: Some("relative".into()),
                 update_checks: true,
                 currency_symbol: "$".into(),
+                date_format: "system".into(),
             },
         )
         .await;
@@ -1818,6 +1822,7 @@ async fn attachments_folder_setting_round_trips() {
             attachments_root: None,
             update_checks: true,
             currency_symbol: "$".into(),
+            date_format: "system".into(),
         },
     )
     .await
@@ -1838,6 +1843,21 @@ async fn update_checks_default_on_and_can_be_turned_off() {
     assert_eq!(entry.entity, AuditEntity::Settings);
     assert_eq!(entry.changes[0].field, "Check for updates");
     assert_eq!(entry.changes[0].new.as_deref(), Some("No"));
+}
+
+#[tokio::test]
+async fn date_format_defaults_to_the_windows_setting_and_is_checked() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let mut settings = s.settings().await.unwrap();
+    assert_eq!(settings.date_format, "system");
+    settings.date_format = "dmy_dot".into();
+    s.update_settings(&ctx(), settings.clone()).await.unwrap();
+    assert_eq!(s.settings().await.unwrap().date_format, "dmy_dot");
+
+    settings.date_format = "yyyy.mm".into();
+    let err = s.update_settings(&ctx(), settings).await.unwrap_err();
+    assert!(matches!(err, Error::Validation(ref e) if e[0].field == "date_format"));
 }
 
 #[tokio::test]
@@ -1915,6 +1935,7 @@ async fn populate(store: &dyn Store) {
                 attachments_root: Some(r"\\server\share\PolarisCal".into()),
                 update_checks: true,
                 currency_symbol: "$".into(),
+                date_format: "system".into(),
             },
         )
         .await

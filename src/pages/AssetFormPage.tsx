@@ -21,6 +21,7 @@ import { formatDate } from "../lib/format";
 import {
   type AssetForm,
   assetToForm,
+  cloneAssetForm,
   emptyAssetForm,
   type FieldErrors,
   fieldErrors,
@@ -42,10 +43,13 @@ export function AssetFormPage() {
   const assetId = Number(id);
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  // `?clone=ID`: a new item pre-filled from an existing one.
+  const cloneId = editing ? null : Number(params.get("clone")) || null;
 
   const lookups = useLookups();
   const systems = useAsync(() => api.listAssets({ kind: "system" }), []);
   const existing = useAsync(() => (editing ? api.getAsset(assetId) : Promise.resolve(null)), [assetId]);
+  const source = useAsync(() => (cloneId ? api.getAsset(cloneId) : Promise.resolve(null)), [cloneId]);
   const records = useAsync(
     () => (editing ? api.listCalibrations({ asset_id: assetId }) : Promise.resolve([])),
     [assetId],
@@ -56,6 +60,8 @@ export function AssetFormPage() {
   const [formError, setFormError] = useState<ApiError>();
   const [saving, setSaving] = useState(false);
   const [askReason, setAskReason] = useState(false);
+  // Set while the typed asset tag is already used by another item.
+  const [tagTaken, setTagTaken] = useState<string>();
   const { can } = useAuth();
 
   // Initialize the form once its source data has loaded.
@@ -63,6 +69,8 @@ export function AssetFormPage() {
     if (form) return;
     if (editing) {
       if (existing.data) setForm(assetToForm(existing.data));
+    } else if (cloneId) {
+      if (source.data) setForm(cloneAssetForm(source.data));
     } else if (lookups.data) {
       const statuses = lookups.data.status.filter((s) => s.is_active);
       const active = statuses.find((s) => s.name === "Active") ?? statuses[0];
@@ -75,12 +83,40 @@ export function AssetFormPage() {
         }),
       );
     }
-  }, [editing, existing.data, lookups.data, form, params]);
+  }, [editing, existing.data, cloneId, source.data, lookups.data, form, params]);
+
+  // Checks the asset tag shortly after typing stops, so a duplicate shows before saving.
+  // Tags are unique ignoring case; archived items count. Saving still checks too.
+  const typedTag = form?.asset_tag.trim() ?? "";
+  useEffect(() => {
+    setTagTaken(undefined);
+    if (!typedTag) return;
+    let current = true;
+    const timer = setTimeout(async () => {
+      try {
+        const matches = await api.listAssets({ search: typedTag, include_archived: true });
+        const other = matches.find(
+          (a) => a.id !== assetId && a.asset_tag.toLowerCase() === typedTag.toLowerCase(),
+        );
+        if (current && other) {
+          setTagTaken(
+            `${other.asset_tag} is already used by ${other.description}${other.is_archived ? " (archived)" : ""}.`,
+          );
+        }
+      } catch {
+        // Not worth interrupting typing for; saving reports a duplicate anyway.
+      }
+    }, 300);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [typedTag, assetId]);
 
   if (!can("edit_records")) {
     return <ErrorAlert error={{ kind: "forbidden", message: "Your role can't add or edit items." }} />;
   }
-  const loadError = lookups.error ?? existing.error ?? systems.error;
+  const loadError = lookups.error ?? existing.error ?? source.error ?? systems.error;
   if (loadError) return <ErrorAlert error={loadError} onRetry={() => window.location.reload()} />;
   if (!form || !lookups.data) return <Loading />;
 
@@ -152,7 +188,9 @@ export function AssetFormPage() {
         description={
           editing
             ? original?.description
-            : form.kind === "system"
+            : source.data
+              ? `Copied from ${source.data.asset_tag}. Enter this one's own asset tag, serial number and dates.`
+              : form.kind === "system"
               ? "A System groups the Instruments it contains. It can have its own calibration schedule too."
               : "A single item under calibration control."
         }
@@ -217,7 +255,7 @@ export function AssetFormPage() {
             label="Asset tag"
             value={form.asset_tag}
             onChange={(v) => set("asset_tag", v)}
-            error={errors.asset_tag}
+            error={errors.asset_tag ?? tagTaken}
             isRequired
             maxLength={64}
             autoFocus={!editing}
@@ -305,16 +343,17 @@ export function AssetFormPage() {
           title="Calibration schedule"
           description="The next calibration date is calculated from the last calibration date plus the interval."
         >
-          {/* The End of month box belongs directly under the interval, in the same column. */}
-          <div className="flex flex-col gap-3">
-            <div className="grid grid-cols-[1fr_140px] items-start gap-3">
+          {/* Interval, unit and End of month share a full-width line (too wide for one column);
+              the hint or error goes under all three. */}
+          <div className="flex flex-col gap-1 md:col-span-2">
+            <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
               <NumberInput
                 label="Calibration interval"
                 value={form.interval_value}
                 onChange={(v) => set("interval_value", v)}
                 minValue={1}
-                error={errors.cal_interval}
-                description="Leave empty if the item has no fixed cycle."
+                isInvalid={!!errors.cal_interval}
+                className="w-36"
               />
               <SelectInput<IntervalUnit>
                 label="Unit"
@@ -326,28 +365,34 @@ export function AssetFormPage() {
                 ]}
                 isRequired
                 allowEmpty={false}
+                className="w-32"
               />
+              <div className="flex h-10 items-center">
+                <CheckboxInput
+                  label="End of month"
+                  isSelected={form.interval_end_of_month}
+                  onChange={(v) => set("interval_end_of_month", v)}
+                  isDisabled={form.interval_value == null}
+                />
+              </div>
             </div>
-            <CheckboxInput
-              label="End of month"
-              description="Due on the last day of the month the interval lands in: calibrated Nov 20, 2026 with 12 months is due Nov 30, 2027."
-              isSelected={form.interval_end_of_month}
-              onChange={(v) => set("interval_end_of_month", v)}
-              isDisabled={form.interval_value == null}
-            />
+            <p className={`text-xs ${errors.cal_interval ? "text-danger" : "text-muted"}`}>
+              {errors.cal_interval ?? "Leave the interval empty if the item has no fixed cycle."}
+            </p>
           </div>
-          <DateInput
-            label="Date put into service"
-            value={form.in_service_date}
-            onChange={(v) => set("in_service_date", v)}
-            error={errors.in_service_date}
-          />
+          {/* Calibration dates on the left, the item's other dates on the right. */}
           <DateInput
             label="First calibration"
             value={form.first_cal_date}
             onChange={(v) => set("first_cal_date", v)}
             error={errors.first_cal_date}
             description="Filled in automatically from the earliest known calibration if left empty."
+          />
+          <DateInput
+            label="Date put into service"
+            value={form.in_service_date}
+            onChange={(v) => set("in_service_date", v)}
+            error={errors.in_service_date}
           />
           {hasRecords ? (
             <DateInput

@@ -31,6 +31,7 @@ export function toSheet(report: ReportTable): ExportSheet {
     columns: report.columns.map((c) => ({ header: c.header, kind: c.kind, width: c.width ?? null })),
     rows: report.rows,
     currency_symbol: null,
+    date_format: null,
   };
 }
 

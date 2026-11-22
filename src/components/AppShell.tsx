@@ -24,6 +24,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { roleMeta } from "../lib/permissions";
 import { setCurrencySymbol } from "../lib/currency";
+import { setDateFormat } from "../lib/dates";
 import { setNoticeDismissed, useAvailableUpdate, useNoticeDismissed } from "../lib/updates";
 import { useAsync } from "../lib/useAsync";
 import { ChangePasswordForm } from "./AuthScreens";
@@ -181,12 +182,18 @@ export function AppShell() {
   const noticeDismissed = useNoticeDismissed();
   const version = useAsync(() => getVersion(), []);
 
-  // The organization's currency, for every money display.
+  // The organization's currency and date format, for every money and date display. Pages
+  // wait for them so their dates don't change format a moment after they appear.
+  const [formatsLoaded, setFormatsLoaded] = useState(false);
   useEffect(() => {
     api
       .getSettings()
-      .then((settings) => setCurrencySymbol(settings.currency_symbol))
-      .catch(() => undefined);
+      .then((settings) => {
+        setCurrencySymbol(settings.currency_symbol);
+        setDateFormat(settings.date_format);
+      })
+      .catch(() => undefined)
+      .finally(() => setFormatsLoaded(true));
   }, []);
 
   return (
@@ -244,7 +251,7 @@ export function AppShell() {
 
       <main className="min-w-0 flex-1 overflow-y-auto print:overflow-visible">
         <div className="px-8 py-7 print:p-0">
-          <Outlet />
+          {formatsLoaded && <Outlet />}
         </div>
       </main>
       <Toast.Provider placement="bottom end" />

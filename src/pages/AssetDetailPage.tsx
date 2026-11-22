@@ -1,5 +1,18 @@
 import { Alert, Button, Card, Chip, Table, toast } from "@heroui/react";
-import { Archive, ArchiveRestore, ArrowLeft, Boxes, ClipboardCheck, Gauge, History, Paperclip, Pencil, Plus, Printer } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Boxes,
+  ClipboardCheck,
+  Copy,
+  Gauge,
+  History,
+  Paperclip,
+  Pencil,
+  Plus,
+  Printer,
+} from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { Asset } from "../bindings/Asset";
@@ -307,6 +320,9 @@ export function AssetDetailPage() {
           <div className={`flex shrink-0 items-center gap-2 ${canEdit ? "" : "hidden"}`}>
             <Button variant="secondary" onPress={() => navigate(`/assets/${asset.id}/edit`)}>
               <Pencil className="size-4" /> Edit
+            </Button>
+            <Button variant="secondary" onPress={() => navigate(`/assets/new?clone=${asset.id}`)}>
+              <Copy className="size-4" /> Clone
             </Button>
             <Button
               variant={asset.is_archived ? "secondary" : "danger-soft"}

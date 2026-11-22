@@ -1294,6 +1294,9 @@ impl Store for SqlStore {
             currency_symbol: value("currency_symbol")
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| AppSettings::DEFAULT_CURRENCY.into()),
+            date_format: value("date_format")
+                .filter(|v| AppSettings::DATE_FORMATS.contains(&v.as_str()))
+                .unwrap_or_else(|| AppSettings::DEFAULT_DATE_FORMAT.into()),
         })
     }
 
@@ -1314,6 +1317,7 @@ impl Store for SqlStore {
             ),
             ("update_checks", settings.update_checks.to_string()),
             ("currency_symbol", settings.currency_symbol.clone()),
+            ("date_format", settings.date_format.clone()),
         ];
         for (key, value) in pairs {
             let exists = tx
@@ -1350,6 +1354,13 @@ impl Store for SqlStore {
                 field: "Currency symbol".into(),
                 old: Some(before.currency_symbol.clone()),
                 new: Some(settings.currency_symbol.clone()),
+            });
+        }
+        if before.date_format != settings.date_format {
+            changes.push(FieldChange {
+                field: "Date format".into(),
+                old: Some(before.date_format.clone()),
+                new: Some(settings.date_format.clone()),
             });
         }
         if before.update_checks != settings.update_checks {

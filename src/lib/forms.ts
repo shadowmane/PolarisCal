@@ -148,6 +148,22 @@ export function assetToForm(a: Asset): AssetForm {
   };
 }
 
+/**
+ * A new item's form copied from `a`: everything except what belongs to that one unit, its
+ * asset tag, serial number and dates (so the copy starts out needing its first calibration).
+ */
+export function cloneAssetForm(a: Asset): AssetForm {
+  return {
+    ...assetToForm(a),
+    asset_tag: "",
+    serial_number: "",
+    in_service_date: null,
+    first_cal_date: null,
+    last_cal_date: null,
+    warranty_end_date: null,
+  };
+}
+
 export function formToAssetInput(f: AssetForm): Converted<AssetInput> {
   const errors: FieldErrors = {};
   if (!f.asset_tag.trim()) errors.asset_tag = "Asset tag is required.";

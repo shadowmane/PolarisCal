@@ -591,10 +591,18 @@ pub struct AppSettings {
     /// Shown before amounts of money throughout the app, e.g. "$" or "€".
     #[serde(default = "default_currency")]
     pub currency_symbol: String,
+    /// How dates are shown throughout the app: one of [`AppSettings::DATE_FORMATS`].
+    /// "system" follows each PC's Windows region setting.
+    #[serde(default = "default_date_format")]
+    pub date_format: String,
 }
 
 fn default_currency() -> String {
     AppSettings::DEFAULT_CURRENCY.into()
+}
+
+fn default_date_format() -> String {
+    AppSettings::DEFAULT_DATE_FORMAT.into()
 }
 
 fn default_true() -> bool {
@@ -604,6 +612,22 @@ fn default_true() -> bool {
 impl AppSettings {
     pub const DEFAULT_IDLE_LOCK_MINUTES: u32 = 15;
     pub const DEFAULT_CURRENCY: &str = "$";
+    pub const DEFAULT_DATE_FORMAT: &str = "system";
+    /// The date formats the app knows how to show (see `src/lib/dates.ts`).
+    pub const DATE_FORMATS: &[&str] = &[
+        "system",
+        "mdy_numeric",
+        "mdy_medium",
+        "mdy_long",
+        "iso",
+        "dmy_slash",
+        "dmy_dot",
+        "dmy_dash",
+        "dmy_medium",
+        "dmy_long",
+        "dmy_mil",
+        "ymd_slash",
+    ];
 
     /// Trims the folder path (blank means unset) and checks the values. Whether the
     /// folder is reachable and writable is checked by the app, not here.
@@ -614,6 +638,12 @@ impl AppSettings {
             return Err(Error::validation(
                 "currency_symbol",
                 "Choose a currency symbol of up to 5 characters.",
+            ));
+        }
+        if !Self::DATE_FORMATS.contains(&self.date_format.as_str()) {
+            return Err(Error::validation(
+                "date_format",
+                "Choose one of the listed date formats.",
             ));
         }
         if !(1..=240).contains(&self.idle_lock_minutes) {
@@ -652,6 +682,7 @@ impl Default for AppSettings {
             attachments_root: None,
             update_checks: true,
             currency_symbol: Self::DEFAULT_CURRENCY.into(),
+            date_format: Self::DEFAULT_DATE_FORMAT.into(),
         }
     }
 }
@@ -743,6 +774,7 @@ mod tests {
             attachments_root: Some("   ".into()),
             update_checks: true,
             currency_symbol: "$".into(),
+            date_format: "system".into(),
         };
         s.normalize().unwrap();
         assert_eq!(s.attachments_root, None, "blank means unset");
@@ -753,6 +785,7 @@ mod tests {
                 attachments_root: Some(ok.into()),
                 update_checks: true,
                 currency_symbol: "$".into(),
+                date_format: "system".into(),
             };
             assert!(s.normalize().is_ok(), "{ok}");
         }
@@ -762,6 +795,7 @@ mod tests {
                 attachments_root: Some(bad.into()),
                 update_checks: true,
                 currency_symbol: "$".into(),
+                date_format: "system".into(),
             };
             assert!(
                 matches!(s.normalize(), Err(Error::Validation(ref e)) if e[0].field == "attachments_root"),
@@ -773,6 +807,7 @@ mod tests {
             attachments_root: None,
             update_checks: true,
             currency_symbol: "$".into(),
+            date_format: "system".into(),
         };
         assert!(s.normalize().is_err());
     }

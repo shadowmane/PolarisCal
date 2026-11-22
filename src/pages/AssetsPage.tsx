@@ -92,8 +92,10 @@ export function AssetsPage() {
                 <Table.Column>Manufacturer / model</Table.Column>
                 <Table.Column>Serial</Table.Column>
                 <Table.Column>Location</Table.Column>
+                <Table.Column>Department</Table.Column>
                 <Table.Column>Status</Table.Column>
                 <Table.Column>Interval</Table.Column>
+                <Table.Column>Last calibration</Table.Column>
                 <Table.Column>Next due</Table.Column>
               </Table.Header>
               <Table.Body
@@ -127,8 +129,10 @@ export function AssetsPage() {
                     </Table.Cell>
                     <Table.Cell>{a.serial_number ?? EMPTY}</Table.Cell>
                     <Table.Cell>{a.location_name ?? EMPTY}</Table.Cell>
+                    <Table.Cell>{a.department_name ?? EMPTY}</Table.Cell>
                     <Table.Cell>{a.status_name}</Table.Cell>
                     <Table.Cell>{formatInterval(a.cal_interval)}</Table.Cell>
+                    <Table.Cell>{formatDate(a.last_cal_date)}</Table.Cell>
                     <Table.Cell>
                       <div className="flex items-center gap-2">
                         <span>{formatDate(a.next_cal_date)}</span>

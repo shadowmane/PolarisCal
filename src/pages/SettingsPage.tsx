@@ -10,6 +10,7 @@ import { ApiError, api } from "../lib/api";
 import { useAsync } from "../lib/useAsync";
 import { NumberInput, SelectInput, SwitchInput, TextInput } from "../components/fields";
 import { CURRENCY_SYMBOLS, setCurrencySymbol } from "../lib/currency";
+import { DATE_FORMATS, type DateFormatId, formatYmd, setDateFormat } from "../lib/dates";
 import { checkForUpdate, describeCheckError, installUpdate, useAvailableUpdate } from "../lib/updates";
 import { useAuth } from "../lib/auth";
 import { fieldErrors } from "../lib/forms";
@@ -222,6 +223,72 @@ function CurrencyCard({ settings, onSaved }: { settings?: AppSettings; onSaved: 
         ) : (
           <p className="text-sm">
             Amounts are shown in <b>{current}</b>. An administrator can change this.
+          </p>
+        )}
+      </Card.Content>
+    </Card>
+  );
+}
+
+/** Today in `format`, as an example. */
+function exampleDate(format: DateFormatId): string {
+  const now = new Date();
+  return formatYmd(now.getFullYear(), now.getMonth() + 1, now.getDate(), format);
+}
+
+function DateFormatCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
+  const { can } = useAuth();
+  const isAdmin = can("admin");
+  const [busy, setBusy] = useState(false);
+  const current = (settings?.date_format ?? "system") as DateFormatId;
+  const options = DATE_FORMATS.map((f) =>
+    f.id === "system"
+      ? { id: f.id, label: f.pattern, description: `${exampleDate(f.id)} on this PC · ${f.usedIn}` }
+      : { id: f.id, label: exampleDate(f.id), description: `${f.pattern} · ${f.usedIn}` },
+  );
+  const currentInfo = DATE_FORMATS.find((f) => f.id === current);
+
+  async function choose(format: DateFormatId | null) {
+    if (!settings || !format || format === current) return;
+    setBusy(true);
+    try {
+      const saved = await api.updateSettings({ ...settings, date_format: format });
+      setDateFormat(saved.date_format);
+      onSaved();
+      toast.success(`Dates now show as ${exampleDate(saved.date_format as DateFormatId)}`);
+    } catch (e) {
+      toast.danger(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <Card.Header>
+        <Card.Title>Date format</Card.Title>
+        <Card.Description>
+          How dates appear in tables, on screens, in printed reports and labels, and in Excel exports. Date boxes
+          take the day, month, and year in the same order. Applies to everyone.
+        </Card.Description>
+      </Card.Header>
+      <Card.Content>
+        {isAdmin ? (
+          <SelectInput<DateFormatId>
+            label="Date format"
+            value={current}
+            onChange={(v) => void choose(v)}
+            options={options}
+            isDisabled={busy || !settings}
+            isRequired
+            allowEmpty={false}
+            className="max-w-xs"
+          />
+        ) : (
+          <p className="text-sm">
+            Dates are shown as <b>{exampleDate(current)}</b>
+            {current === "system" ? " (this PC's Windows region setting)" : ` (${currentInfo?.pattern})`}. An
+            administrator can change this.
           </p>
         )}
       </Card.Content>
@@ -445,6 +512,7 @@ export function SettingsPage() {
 
         <SecurityCard settings={settings.data} onSaved={settings.reload} />
         <CurrencyCard settings={settings.data} onSaved={settings.reload} />
+        <DateFormatCard settings={settings.data} onSaved={settings.reload} />
         <AttachmentsFolderCard settings={settings.data} onSaved={settings.reload} />
         <UpdatesCard version={data?.version} settings={settings.data} onSaved={settings.reload} />
 

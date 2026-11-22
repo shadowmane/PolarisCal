@@ -62,6 +62,31 @@ pub struct ExportSheet {
     /// Shown before money values; "$" when absent.
     #[serde(default)]
     pub currency_symbol: Option<String>,
+    /// The organization's date format (a Settings `date_format` id); ISO 8601 when absent.
+    #[serde(default)]
+    pub date_format: Option<String>,
+}
+
+/// The Excel number format for dates in the organization's date format. "system" uses
+/// Excel's built-in short date, which follows the Windows region of whoever opens the file.
+/// Slashes are escaped: unescaped, Excel swaps them for the viewer's date separator.
+fn date_format(id: Option<&str>) -> Format {
+    let format = Format::new().set_align(FormatAlign::Left);
+    let pattern = match id {
+        Some("system") => return format.set_num_format_index(14),
+        Some("mdy_numeric") => r"mm\/dd\/yyyy",
+        Some("mdy_medium") => "mmm d, yyyy",
+        Some("mdy_long") => "mmmm d, yyyy",
+        Some("dmy_slash") => r"dd\/mm\/yyyy",
+        Some("dmy_dot") => "dd.mm.yyyy",
+        Some("dmy_dash") => "dd-mm-yyyy",
+        Some("dmy_medium") => "d mmm yyyy",
+        Some("dmy_long") => "d mmmm yyyy",
+        Some("dmy_mil") => "dd-mmm-yyyy",
+        Some("ymd_slash") => r"yyyy\/mm\/dd",
+        _ => "yyyy-mm-dd",
+    };
+    format.set_num_format(pattern)
 }
 
 /// An Excel number format showing `symbol` before amounts, e.g. `"€"#,##0.00`.
@@ -109,9 +134,6 @@ pub fn write_workbook(path: &Path, sheets: &[ExportSheet]) -> Result<(), XlsxErr
         .set_border_bottom(FormatBorder::Thin)
         .set_text_wrap()
         .set_align(FormatAlign::Top);
-    let date_fmt = Format::new()
-        .set_num_format("yyyy-mm-dd")
-        .set_align(FormatAlign::Left);
     let number_fmt = Format::new().set_num_format("General");
     let text_fmt = Format::new().set_align(FormatAlign::Top);
     let generated = Local::now()
@@ -123,6 +145,7 @@ pub fn write_workbook(path: &Path, sheets: &[ExportSheet]) -> Result<(), XlsxErr
         let money_fmt = Format::new().set_num_format(money_format(
             sheet.currency_symbol.as_deref().unwrap_or("$"),
         ));
+        let date_fmt = date_format(sheet.date_format.as_deref());
         let ws = workbook.add_worksheet();
         ws.set_name(sheet_name(&sheet.title, &mut used))?;
         ws.write_string_with_format(0, 0, &sheet.title, &title_fmt)?;
@@ -291,6 +314,7 @@ mod tests {
                 ],
             ],
             currency_symbol: Some("€".into()),
+            date_format: None,
         };
         write_workbook(&path, &[sheet]).unwrap();
         let bytes = std::fs::read(&path).unwrap();

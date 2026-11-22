@@ -8,6 +8,8 @@ import { useNavigate } from "react-router";
 import type { ExportCell } from "../bindings/ExportCell";
 import { ApiError, api } from "../lib/api";
 import { currencySymbol, useCurrencySymbol } from "../lib/currency";
+import { dateFormat, useDateFormat } from "../lib/dates";
+import { formatDateTime } from "../lib/format";
 import { EMPTY, formatCents, formatDate } from "../lib/format";
 import { isoToday, type ReportColumn, type ReportTable, toSheet } from "../lib/reports";
 
@@ -41,7 +43,7 @@ export function ReportToolbar({ report, fileName }: { report: ReportTable; fileN
     if (!path) return;
     setBusy(true);
     try {
-      await api.exportXlsx(path, [{ ...toSheet(report), currency_symbol: currencySymbol() }]);
+      await api.exportXlsx(path, [{ ...toSheet(report), currency_symbol: currencySymbol(), date_format: dateFormat() }]);
       toast.success(`Saved ${path.split(/[\\/]/).pop()}`);
     } catch (e) {
       toast.danger(e instanceof ApiError ? e.message : String(e));
@@ -66,6 +68,7 @@ export function ReportToolbar({ report, fileName }: { report: ReportTable; fileN
 export function ReportBody({ report, emptyText }: { report: ReportTable; emptyText: string }) {
   const navigate = useNavigate();
   useCurrencySymbol(); // re-render money cells if the currency changes
+  useDateFormat(); // and dates if the date format does
   const wide = report.columns.length > 7;
   usePageStyle(`@page { size: ${wide ? "landscape" : "portrait"}; }`);
 
@@ -74,7 +77,7 @@ export function ReportBody({ report, emptyText }: { report: ReportTable; emptyTe
       <div className="mb-3 hidden print:block">
         <h1 className="text-lg font-semibold">{report.title}</h1>
         {report.subtitle && <p className="text-xs">{report.subtitle}</p>}
-        <p className="text-[10px]">Printed {new Date().toLocaleString()} from PolarisCal</p>
+        <p className="text-[10px]">Printed {formatDateTime(new Date().toISOString())} from PolarisCal</p>
       </div>
       {report.rows.length === 0 ? (
         <p className="rounded-xl border border-dashed border-separator px-4 py-10 text-center text-sm text-muted print:hidden">

@@ -4,6 +4,7 @@ import type { LookupItem } from "../bindings/LookupItem";
 import { ApiError } from "./api";
 import {
   assetToForm,
+  cloneAssetForm,
   centsToDollars,
   dollarsToCents,
   emptyAssetForm,
@@ -149,6 +150,34 @@ describe("asset form", () => {
     expect(form.interval_value).toBe(6);
     expect(form.interval_unit).toBe("days");
     expect(form.last_cal_date).toBe("2026-03-15"); // the entered date, not the derived one
+  });
+
+  it("clones everything but the unit's tag, serial number and dates", () => {
+    const asset = {
+      ...formToAssetInputValue(),
+      asset_tag: "DMM-1",
+      serial_number: "SN-1",
+      model_number: "87V",
+      manufacturer_id: 3,
+      cal_interval: { value: 6, unit: "months", end_of_month: true },
+      last_cal_date_entered: "2026-03-15",
+      first_cal_date: "2025-03-15",
+      in_service_date: "2025-03-01",
+      warranty_end_date: "2026-03-01",
+      notes: "Bench 2",
+    } as unknown as Asset;
+    const form = cloneAssetForm(asset);
+    expect(form).toEqual({
+      ...assetToForm(asset),
+      asset_tag: "",
+      serial_number: "",
+      in_service_date: null,
+      first_cal_date: null,
+      last_cal_date: null,
+      warranty_end_date: null,
+    });
+    expect(form.model_number).toBe("87V");
+    expect(form.interval_end_of_month).toBe(true);
   });
 });
 

@@ -8,6 +8,7 @@ import {
   DatePicker,
   Description,
   FieldError,
+  I18nProvider,
   Input,
   Label,
   ListBox,
@@ -20,6 +21,7 @@ import {
 import { X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useCurrencySymbol } from "../lib/currency";
+import { dateInputLocale, useDateFormat } from "../lib/dates";
 import { fromDateValue, toDateValue } from "../lib/forms";
 
 interface BaseProps {
@@ -117,9 +119,12 @@ export function NumberInput({
   formatOptions,
   step,
   prefix,
+  isInvalid,
   "aria-label": ariaLabel,
 }: Omit<BaseProps, "label"> & {
   label?: string;
+  /** Shows the field as invalid without an error message under it (shown elsewhere). */
+  isInvalid?: boolean;
   value: number | null;
   onChange: (v: number | null) => void;
   minValue?: number;
@@ -136,7 +141,7 @@ export function NumberInput({
       onChange={(v) => onChange(v == null || Number.isNaN(v) ? null : v)}
       isRequired={isRequired}
       isDisabled={isDisabled}
-      isInvalid={!!error}
+      isInvalid={isInvalid ?? !!error}
       validationBehavior="aria"
       minValue={minValue}
       step={step}
@@ -179,7 +184,9 @@ export function DateInput({
   isDisabled,
   className,
 }: BaseProps & { value: string | null; onChange: (v: string | null) => void }) {
-  return (
+  // The day, month and year boxes follow the organization's date format (Settings).
+  const locale = dateInputLocale(useDateFormat());
+  const picker = (
     <DatePicker
       value={toDateValue(value)}
       onChange={(v) => onChange(fromDateValue(v))}
@@ -230,6 +237,7 @@ export function DateInput({
       </DatePicker.Popover>
     </DatePicker>
   );
+  return locale ? <I18nProvider locale={locale}>{picker}</I18nProvider> : picker;
 }
 
 export interface Option<K extends string | number> {
