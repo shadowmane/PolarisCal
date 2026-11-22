@@ -141,7 +141,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 11) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 12) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -269,6 +269,42 @@ reports to landscape.
 latest calibration record), and due date, on Letter 30-up (Avery 5160 size), Letter 10-up (5163),
 A4 14-up (L7163), or one label per page for label printers. A part-used sheet can be reused by
 skipping its used positions.
+
+## Calibration certificates
+
+Generate Certificate issues a certificate for an internal item or an external customer's
+equipment. The details are entered on the left and the certificate is drawn on the right by
+`CertificateView`, an HTML page laid out at its real paper size. Saving the PDF prints that
+same element through WebView2's `PrintToPdf` (`src-tauri/src/certificates.rs`), with
+everything else on the page hidden for print, so the file always matches the preview and
+its text stays selectable.
+
+Settings > Certificate Template holds the organization's layout (name, address, logo as a
+data URL, accent color, border, font, paper, temperature unit, statement, footer) and the
+numbering pattern, as JSON in `app_settings` (`certificate_template`). The counter lives in
+its own keys (`certificate_next_number`, `certificate_number_year`) and is read and advanced
+in the same transaction that inserts the certificate; the unique index on
+`certificates.certificate_number` stops two computers issuing the same number.
+
+Each issued certificate is kept in `certificates` with its details and a copy of the
+template as JSON, so a reprint from Issued Certificates looks the same after the template
+changes. For internal certificates the PDF is also attached to the item when an attachments
+folder is set.
+
+Calibrated by and Approved by are free text, or a PolarisCal user picked from a list. A
+user's signature (an image saved on the Users page, in `users.signature`) is printed above
+their line; the store copies it from the user into the certificate when issuing, never from
+what the page sends. A blank Approved by means the person who calibrated it approved it.
+
+For an internal item picked from the list, Generate Certificate can also add a service
+record to it (service type and provider chosen on the page, the certificate number filled
+in) and attach the PDF to that record. The record is created right after the certificate
+is issued, with the regular service record command; if it fails, the certificate stands
+and the page says so. It never changes the item's status.
+
+Test data is an optional PDF appended to the certificate PDF after it is printed
+(`src-tauri/src/pdf_merge.rs`, using lopdf). Only its file name is kept with the
+certificate; to include it in a later copy, attach the file again.
 
 ## Installers and updates
 

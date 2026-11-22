@@ -307,6 +307,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "repairs",
         include_str!("../../migrations/mssql/0011_repairs.sql"),
     ),
+    (
+        12,
+        "certificates",
+        include_str!("../../migrations/mssql/0012_certificates.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

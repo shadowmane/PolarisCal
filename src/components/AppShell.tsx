@@ -3,6 +3,7 @@ import {
   ArrowDownCircle,
   ClipboardCheck,
   Database,
+  FileBadge,
   FileChartColumn,
   Gauge,
   History,
@@ -39,6 +40,7 @@ const MAIN_NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/assets", label: "Instruments & Systems", icon: Gauge },
   { to: "/calibrations", label: "Service Records", icon: ClipboardCheck },
+  { to: "/certificates/new", label: "Generate Certificate", icon: FileBadge },
   { to: "/reports", label: "Reports", icon: FileChartColumn },
 ];
 
@@ -178,6 +180,10 @@ export function AppShell() {
   const dark = resolvedTheme === "dark";
   const { can } = useAuth();
   const adminNav = ADMIN_NAV.filter((item) => !item.adminOnly || can("admin"));
+  // Viewers can't generate certificates, but can look through the issued ones.
+  const mainNav = MAIN_NAV.map((item) =>
+    item.to === "/certificates/new" && !can("edit_records") ? { ...item, to: "/certificates", label: "Certificates" } : item,
+  );
   const update = useAvailableUpdate();
   const noticeDismissed = useNoticeDismissed();
   const version = useAsync(() => getVersion(), []);
@@ -228,7 +234,7 @@ export function AppShell() {
           </Tooltip>
         </div>
 
-        <NavSection items={MAIN_NAV} />
+        <NavSection items={mainNav} />
         <NavSection title="Administration" items={adminNav} />
 
         {update && noticeDismissed && (

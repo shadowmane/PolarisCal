@@ -103,6 +103,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("row_version", Int),
             ("created_at", Time),
             ("updated_at", Time),
+            ("signature", Text),
         ],
     },
     TableSpec {
@@ -186,6 +187,25 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("row_version", Int),
             ("created_at", Time),
             ("updated_at", Time),
+        ],
+    },
+    TableSpec {
+        name: "certificates",
+        label: "Certificates",
+        identity: true,
+        columns: &[
+            ("id", Int),
+            ("certificate_number", Text),
+            ("kind", Text),
+            ("asset_id", Int),
+            ("subject", Text),
+            ("description", Text),
+            ("cal_date", Date),
+            ("details", Text),
+            ("template", Text),
+            ("issued_by_id", Int),
+            ("issued_by", Text),
+            ("created_at", Time),
         ],
     },
     TableSpec {

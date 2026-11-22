@@ -9,7 +9,9 @@ import { AssetFormPage } from "./pages/AssetFormPage";
 import { AssetsPage } from "./pages/AssetsPage";
 import { AuditPage } from "./pages/AuditPage";
 import { CalibrationsPage } from "./pages/CalibrationsPage";
+import { CertificatePage, CertificatesPage } from "./pages/CertificatesPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { GenerateCertificatePage } from "./pages/GenerateCertificatePage";
 import { ListsPage } from "./pages/ListsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HistoryReportPage, ReportsPage } from "./pages/ReportsPage";
@@ -29,6 +31,9 @@ const router = createHashRouter([
       { path: "assets/:id", element: <AssetDetailPage /> },
       { path: "assets/:id/edit", element: <AssetFormPage /> },
       { path: "calibrations", element: <CalibrationsPage /> },
+      { path: "certificates", element: <CertificatesPage /> },
+      { path: "certificates/new", element: <GenerateCertificatePage /> },
+      { path: "certificates/:id", element: <CertificatePage /> },
       { path: "lists", element: <ListsPage /> },
       { path: "users", element: <UsersPage /> },
       { path: "audit", element: <AuditPage /> },

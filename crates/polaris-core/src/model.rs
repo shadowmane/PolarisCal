@@ -46,6 +46,7 @@ macro_rules! text_enum {
         }
     };
 }
+pub(crate) use text_enum;
 
 text_enum!(
     /// An Instrument is a single calibrated item; a System groups Instruments.
@@ -172,6 +173,7 @@ text_enum!(
         Session => "session",
         Settings => "settings",
         Attachment => "attachment",
+        Certificate => "certificate",
         /// The database as a whole (data copies).
         Database => "database",
     }

@@ -16,6 +16,13 @@ import type { AuthStatus } from "../bindings/AuthStatus";
 import type { CalibrationFilter } from "../bindings/CalibrationFilter";
 import type { CalibrationInput } from "../bindings/CalibrationInput";
 import type { CalibrationRecord } from "../bindings/CalibrationRecord";
+import type { Certificate } from "../bindings/Certificate";
+import type { CertificateDetails } from "../bindings/CertificateDetails";
+import type { CertificateFilter } from "../bindings/CertificateFilter";
+import type { CertificatePaper } from "../bindings/CertificatePaper";
+import type { CertificateSigner } from "../bindings/CertificateSigner";
+import type { CertificateSummary } from "../bindings/CertificateSummary";
+import type { CertificateTemplate } from "../bindings/CertificateTemplate";
 import type { CommandError } from "../bindings/CommandError";
 import type { ConnectionCheck } from "../bindings/ConnectionCheck";
 import type { ConnectionChoice } from "../bindings/ConnectionChoice";
@@ -182,4 +189,25 @@ export const api = {
 
   // Reports
   exportXlsx: (path: string, sheets: ExportSheet[]) => call<void>("export_xlsx", { path, sheets }),
+
+  // Certificates
+  getCertificateTemplate: () => call<CertificateTemplate>("get_certificate_template"),
+  updateCertificateTemplate: (template: CertificateTemplate) =>
+    call<CertificateTemplate>("update_certificate_template", { template }),
+  listCertificates: (filter: Partial<CertificateFilter> = {}) =>
+    call<CertificateSummary[]>("list_certificates", { filter: { search: null, asset_id: null, ...filter } }),
+  getCertificate: (id: number) => call<Certificate>("get_certificate", { id }),
+  createCertificate: (details: CertificateDetails) => call<Certificate>("create_certificate", { details }),
+  /** Reads a logo or signature image file as a data URL. */
+  readImageFile: (path: string) => call<string>("read_image_file", { path }),
+  listCertificateSigners: () => call<CertificateSigner[]>("list_certificate_signers"),
+  getUserSignature: (userId: number) => call<string | null>("get_user_signature", { user_id: userId }),
+  setUserSignature: (userId: number, signature: string | null) =>
+    call<void>("set_user_signature", { user_id: userId, signature }),
+  /**
+   * Writes what the window shows for printing (the certificate) to a PDF, appends the
+   * test data PDF if given, then opens the file if asked.
+   */
+  saveCertificatePdf: (path: string, paper: CertificatePaper, testData: string | null = null, open = true) =>
+    call<void>("save_certificate_pdf", { path, paper, test_data: testData, open }),
 };

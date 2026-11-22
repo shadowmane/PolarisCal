@@ -4,14 +4,18 @@ use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Local, NaiveDate, SubsecRound, Utc};
+use chrono::{DateTime, Datelike, Local, NaiveDate, SubsecRound, Utc};
 use polaris_core::audit::{
-    Actor, AuditEntry, AuditFilter, FieldChange, NewAuditEntry, WriteContext, asset_snapshot,
-    attachment_snapshot, calibration_snapshot, created, deleted, diff, lookup_snapshot,
-    user_snapshot,
+    Actor, AuditEntry, AuditFilter, FieldChange, NewAuditEntry, Snapshot, WriteContext,
+    asset_snapshot, attachment_snapshot, calibration_snapshot, created, deleted, diff,
+    lookup_snapshot, user_snapshot,
 };
 use polaris_core::auth::{
     NewUser, User, UserCredentials, UserUpdate, check_password_rules, hash_password,
+};
+use polaris_core::certificate::{
+    Certificate, CertificateDetails, CertificateFilter, CertificateKind, CertificateSigner,
+    CertificateSummary, CertificateTemplate, check_image,
 };
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, AssetKind, Attachment, AttachmentFilter,
@@ -941,6 +945,212 @@ fn map_audit(row: &Row) -> Result<AuditEntry> {
 
 fn lookup_label(item: &LookupItem) -> String {
     format!("{}: {}", item.kind, item.name)
+}
+
+// ---------------------------------------------------------------------------
+// Certificates
+// ---------------------------------------------------------------------------
+
+const TEMPLATE_KEY: &str = "certificate_template";
+const NEXT_NUMBER_KEY: &str = "certificate_next_number";
+const NUMBER_YEAR_KEY: &str = "certificate_number_year";
+
+async fn read_setting(conn: &mut Conn, key: &str) -> Result<Option<String>> {
+    conn.fetch_optional(
+        "SELECT setting_value FROM app_settings WHERE setting_key = ?1",
+        params![key],
+    )
+    .await?
+    .map(|r| r.get::<String>("setting_value"))
+    .transpose()
+}
+
+async fn write_setting(conn: &mut Conn, key: &str, value: &str) -> Result<()> {
+    let exists = conn
+        .fetch_optional(
+            "SELECT 1 AS n FROM app_settings WHERE setting_key = ?1",
+            params![key],
+        )
+        .await?
+        .is_some();
+    let sql = if exists {
+        "UPDATE app_settings SET setting_value = ?2, updated_at = ?3 WHERE setting_key = ?1"
+    } else {
+        "INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES (?1, ?2, ?3)"
+    };
+    conn.execute(sql, params![key, value, now()]).await?;
+    Ok(())
+}
+
+/// The template with `next_number` from the counter (1 again in a new year when the
+/// counter resets yearly). A missing or unreadable template is the default one.
+async fn read_certificate_template(conn: &mut Conn) -> Result<CertificateTemplate> {
+    let mut template = read_setting(conn, TEMPLATE_KEY)
+        .await?
+        .and_then(|json| serde_json::from_str::<CertificateTemplate>(&json).ok())
+        .unwrap_or_default();
+    let next = read_setting(conn, NEXT_NUMBER_KEY)
+        .await?
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(1);
+    let year = read_setting(conn, NUMBER_YEAR_KEY)
+        .await?
+        .and_then(|v| v.parse::<i32>().ok());
+    let new_year = year.is_some_and(|y| y != today().year());
+    template.next_number = if template.number_reset_yearly && new_year {
+        1
+    } else {
+        next
+    };
+    Ok(template)
+}
+
+async fn write_certificate_counter(conn: &mut Conn, next: u32) -> Result<()> {
+    write_setting(conn, NEXT_NUMBER_KEY, &next.to_string()).await?;
+    write_setting(conn, NUMBER_YEAR_KEY, &today().year().to_string()).await
+}
+
+/// Audit lines for a template change: one per changed setting; the logo is summarized.
+fn template_changes(before: &CertificateTemplate, after: &CertificateTemplate) -> Vec<FieldChange> {
+    let as_map = |t: &CertificateTemplate| match serde_json::to_value(t) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    let (old, new) = (as_map(before), as_map(after));
+    let show = |key: &str, v: Option<&serde_json::Value>| -> Option<String> {
+        match v? {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(s) if key == "logo" => {
+                Some(format!("Image ({} KB)", s.len() / 1024))
+            }
+            serde_json::Value::String(s) => Some(s.clone()),
+            other => Some(other.to_string()),
+        }
+    };
+    new.iter()
+        .filter(|(key, value)| old.get(*key) != Some(*value))
+        .map(|(key, value)| {
+            let label = key.replace('_', " ");
+            let mut label_chars = label.chars();
+            let label = label_chars
+                .next()
+                .map(|c| c.to_uppercase().collect::<String>() + label_chars.as_str())
+                .unwrap_or_default();
+            FieldChange {
+                field: format!("Certificate template: {label}"),
+                old: show(key, old.get(key)),
+                new: show(key, Some(value)),
+            }
+        })
+        .collect()
+}
+
+macro_rules! certificate_select {
+    () => {
+        "SELECT c.id, c.certificate_number, c.kind, c.asset_id, c.subject, c.description,
+                c.cal_date, c.issued_by, c.created_at
+         FROM certificates c"
+    };
+}
+
+fn map_certificate_summary(row: &Row) -> Result<CertificateSummary> {
+    Ok(CertificateSummary {
+        id: row.get("id")?,
+        certificate_number: row.get("certificate_number")?,
+        kind: row.get::<String>("kind")?.parse()?,
+        asset_id: row.get("asset_id")?,
+        subject: row.get("subject")?,
+        description: row.get("description")?,
+        cal_date: row.get("cal_date")?,
+        issued_by: row.get("issued_by")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
+async fn fetch_certificate(conn: &mut Conn, id: Id) -> Result<Certificate> {
+    const SQL: &str =
+        "SELECT c.id, c.certificate_number, c.kind, c.asset_id, c.subject, c.description,
+                              c.cal_date, c.issued_by, c.created_at, c.details, c.template
+                       FROM certificates c WHERE c.id = ?1";
+    let row = conn
+        .fetch_optional(SQL, params![id])
+        .await?
+        .ok_or(Error::NotFound {
+            entity: "certificate",
+            id,
+        })?;
+    let decode = |what: &str, e: serde_json::Error| {
+        Error::Database(format!("certificate {id} has unreadable {what}: {e}"))
+    };
+    Ok(Certificate {
+        summary: map_certificate_summary(&row)?,
+        details: serde_json::from_str(&row.get::<String>("details")?)
+            .map_err(|e| decode("details", e))?,
+        template: serde_json::from_str(&row.get::<String>("template")?)
+            .map_err(|e| decode("template", e))?,
+    })
+}
+
+async fn fetch_signature(conn: &mut Conn, user_id: Id) -> Result<Option<Option<String>>> {
+    conn.fetch_optional(
+        "SELECT signature FROM users WHERE id = ?1",
+        params![user_id],
+    )
+    .await?
+    .map(|r| r.get::<Option<String>>("signature"))
+    .transpose()
+}
+
+/// Fills in a signer's saved signature (and forgets an id that isn't a user).
+async fn resolve_signer(
+    conn: &mut Conn,
+    id: &mut Option<Id>,
+    signature: &mut Option<String>,
+) -> Result<()> {
+    *signature = None;
+    if let Some(user_id) = *id {
+        match fetch_signature(conn, user_id).await? {
+            Some(saved) => *signature = saved,
+            None => *id = None,
+        }
+    }
+    Ok(())
+}
+
+fn certificate_snapshot(c: &Certificate) -> Snapshot {
+    let d = &c.details;
+    vec![
+        (
+            "Certificate number",
+            Some(c.summary.certificate_number.clone()),
+        ),
+        (
+            "Type",
+            Some(match d.kind {
+                CertificateKind::Internal => "Internal".to_string(),
+                CertificateKind::External => "External".to_string(),
+            }),
+        ),
+        (
+            if d.kind == CertificateKind::Internal {
+                "Asset number"
+            } else {
+                "Customer"
+            },
+            Some(c.summary.subject.clone()).filter(|s| !s.is_empty()),
+        ),
+        (
+            "Description",
+            Some(d.description.clone()).filter(|s| !s.is_empty()),
+        ),
+        (
+            "Serial number",
+            Some(d.serial_number.clone()).filter(|s| !s.is_empty()),
+        ),
+        ("Calibration date", Some(d.cal_date.to_string())),
+        ("Next calibration", d.next_cal_date.map(|n| n.to_string())),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -2225,6 +2435,232 @@ impl Store for SqlStore {
     }
 
     // --- Moving data between databases -------------------------------------------
+
+    // --- Certificates ------------------------------------------------------------
+
+    async fn certificate_template(&self) -> Result<CertificateTemplate> {
+        read_certificate_template(&mut self.conn().await?).await
+    }
+
+    async fn update_certificate_template(
+        &self,
+        ctx: &WriteContext,
+        mut template: CertificateTemplate,
+    ) -> Result<CertificateTemplate> {
+        template.normalize()?;
+        let mut tx = self.begin().await?;
+        let before = read_certificate_template(&mut tx).await?;
+        let json = serde_json::to_string(&template)
+            .map_err(|e| Error::Database(format!("could not encode the template: {e}")))?;
+        write_setting(&mut tx, TEMPLATE_KEY, &json).await?;
+        write_certificate_counter(&mut tx, template.next_number).await?;
+        let changes = template_changes(&before, &template);
+        if !changes.is_empty() {
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Settings).changes(changes),
+            )
+            .await?;
+        }
+        let saved = read_certificate_template(&mut tx).await?;
+        tx.commit().await?;
+        Ok(saved)
+    }
+
+    async fn list_certificates(
+        &self,
+        filter: &CertificateFilter,
+    ) -> Result<Vec<CertificateSummary>> {
+        const SQL: &str = concat!(
+            certificate_select!(),
+            " WHERE (?1 IS NULL OR c.asset_id = ?1)
+                AND (?2 IS NULL
+                     OR LOWER(c.certificate_number) LIKE LOWER(?2) ESCAPE '!'
+                     OR LOWER(c.subject)            LIKE LOWER(?2) ESCAPE '!'
+                     OR LOWER(c.description)        LIKE LOWER(?2) ESCAPE '!')
+              ORDER BY c.created_at DESC, c.id DESC"
+        );
+        let search = filter
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(like_pattern);
+        self.conn()
+            .await?
+            .fetch_all(SQL, params![filter.asset_id, search])
+            .await?
+            .iter()
+            .map(map_certificate_summary)
+            .collect()
+    }
+
+    async fn get_certificate(&self, id: Id) -> Result<Certificate> {
+        fetch_certificate(&mut self.conn().await?, id).await
+    }
+
+    async fn certificate_signers(&self) -> Result<Vec<CertificateSigner>> {
+        self.conn()
+            .await?
+            .fetch_all(
+                "SELECT id, display_name,
+                        CASE WHEN signature IS NULL THEN 0 ELSE 1 END AS has_signature
+                 FROM users WHERE is_active = TRUE
+                 ORDER BY LOWER(display_name), id",
+                params![],
+            )
+            .await?
+            .iter()
+            .map(|r| {
+                Ok(CertificateSigner {
+                    id: r.get("id")?,
+                    display_name: r.get("display_name")?,
+                    has_signature: r.get::<i64>("has_signature")? != 0,
+                })
+            })
+            .collect()
+    }
+
+    async fn user_signature(&self, user_id: Id) -> Result<Option<String>> {
+        fetch_signature(&mut self.conn().await?, user_id)
+            .await?
+            .ok_or(Error::NotFound {
+                entity: "user",
+                id: user_id,
+            })
+    }
+
+    async fn set_user_signature(
+        &self,
+        ctx: &WriteContext,
+        user_id: Id,
+        signature: Option<String>,
+    ) -> Result<()> {
+        let signature = signature.filter(|s| !s.trim().is_empty());
+        if let Some(image) = &signature {
+            check_image("signature", image)?;
+        }
+        let mut tx = self.begin().await?;
+        let user = tx
+            .fetch_optional(
+                "SELECT username, signature FROM users WHERE id = ?1",
+                params![user_id],
+            )
+            .await?
+            .ok_or(Error::NotFound {
+                entity: "user",
+                id: user_id,
+            })?;
+        let username: String = user.get("username")?;
+        let had: Option<String> = user.get("signature")?;
+        tx.execute(
+            "UPDATE users SET signature = ?2, updated_at = ?3, row_version = row_version + 1
+             WHERE id = ?1",
+            params![user_id, &signature, now()],
+        )
+        .await?;
+        let describe = |s: &Option<String>| s.as_ref().map(|_| "Saved".to_string());
+        if had != signature {
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::User)
+                    .subject(user_id, &username)
+                    .changes(vec![FieldChange {
+                        field: "Signature".into(),
+                        old: describe(&had),
+                        new: if had.is_some() && signature.is_some() {
+                            Some("Replaced".into())
+                        } else {
+                            describe(&signature)
+                        },
+                    }]),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn create_certificate(
+        &self,
+        ctx: &WriteContext,
+        mut details: CertificateDetails,
+    ) -> Result<Certificate> {
+        details.normalize()?;
+        let mut tx = self.begin().await?;
+        if let Some(asset_id) = details.asset_id {
+            let exists = tx
+                .fetch_optional("SELECT 1 AS n FROM assets WHERE id = ?1", params![asset_id])
+                .await?
+                .is_some();
+            if !exists {
+                return Err(Error::validation(
+                    "asset_id",
+                    "The selected item does not exist.",
+                ));
+            }
+        }
+        resolve_signer(
+            &mut tx,
+            &mut details.calibrated_by_id,
+            &mut details.calibrated_by_signature,
+        )
+        .await?;
+        resolve_signer(
+            &mut tx,
+            &mut details.approved_by_id,
+            &mut details.approved_by_signature,
+        )
+        .await?;
+        let template = read_certificate_template(&mut tx).await?;
+        let issued = now();
+        let number = template.format_number(template.next_number, today());
+        let encode = |e: serde_json::Error| {
+            Error::Database(format!("could not encode the certificate: {e}"))
+        };
+        let details_json = serde_json::to_string(&details).map_err(encode)?;
+        let template_json = serde_json::to_string(&template).map_err(encode)?;
+        let id = tx
+            .insert(
+                "INSERT INTO certificates (certificate_number, kind, asset_id, subject, description,
+                                           cal_date, details, template, issued_by_id, issued_by,
+                                           created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    &number,
+                    details.kind.as_str(),
+                    details.asset_id,
+                    details.subject(),
+                    &details.description,
+                    details.cal_date,
+                    details_json,
+                    template_json,
+                    ctx.actor.user_id,
+                    &ctx.actor.username,
+                    issued
+                ],
+            )
+            .await
+            .map_err(|e| {
+                write_err(e, || {
+                    format!(
+                        "Certificate number {number} is already used. Change the next number in \
+                         Settings > Certificate Template."
+                    )
+                })
+            })?;
+        write_certificate_counter(&mut tx, template.next_number.saturating_add(1)).await?;
+        let certificate = fetch_certificate(&mut tx, id).await?;
+        let mut entry = NewAuditEntry::by(ctx, AuditAction::Create, AuditEntity::Certificate)
+            .subject(id, &number)
+            .changes(created(&certificate_snapshot(&certificate)));
+        if let Some(asset_id) = details.asset_id {
+            entry = entry.asset(asset_id);
+        }
+        write_audit(&mut tx, entry).await?;
+        tx.commit().await?;
+        Ok(certificate)
+    }
 
     async fn table_counts(&self) -> Result<Vec<TableCount>> {
         crate::transfer::table_counts(&mut self.conn().await?).await

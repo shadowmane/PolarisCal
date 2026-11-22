@@ -109,6 +109,7 @@ export const auditEntityLabel: Record<AuditEntity, string> = {
   session: "Session",
   settings: "Settings",
   attachment: "File",
+  certificate: "Certificate",
   database: "Database",
 };
 

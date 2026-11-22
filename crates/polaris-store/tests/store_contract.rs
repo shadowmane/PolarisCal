@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use chrono::{Days, Local, NaiveDate};
 use polaris_core::audit::{Actor, AuditFilter, WriteContext};
 use polaris_core::auth::{NewUser, UserUpdate, verify_password};
+use polaris_core::certificate::*;
 use polaris_core::model::*;
 use polaris_core::{Error, Store};
 use polaris_store::DatabaseConfig;
@@ -219,7 +220,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 11);
+    assert_eq!(info.schema_version, 12);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -2104,4 +2105,175 @@ async fn copying_into_a_database_in_use_is_refused() {
             .iter()
             .all(|e| e.action != AuditAction::Export)
     );
+}
+
+fn certificate_details(kind: CertificateKind) -> CertificateDetails {
+    CertificateDetails {
+        kind,
+        asset_id: None,
+        customer_name: "Acme Labs".into(),
+        customer_address: "1 Main St".into(),
+        asset_tag: String::new(),
+        manufacturer: "Fluke".into(),
+        description: "Digital multimeter".into(),
+        model_number: "87V".into(),
+        serial_number: "SN-1".into(),
+        procedure: "CP-100".into(),
+        temperature: "21.5".into(),
+        humidity: "45".into(),
+        cal_date: Local::now().date_naive(),
+        next_cal_date: None,
+        condition_received: Some(ConditionReceived::Pass),
+        condition_returned: Some(ConditionReturned::Pass),
+        equipment: vec![CertificateEquipment {
+            asset_tag: "STD-1".into(),
+            description: "Calibrator".into(),
+            ..Default::default()
+        }],
+        calibrated_by: "Tech".into(),
+        calibrated_by_id: None,
+        approved_by: String::new(),
+        approved_by_id: None,
+        calibrated_by_signature: None,
+        approved_by_signature: None,
+        test_data_file: String::new(),
+    }
+}
+
+#[tokio::test]
+async fn certificates_are_numbered_logged_and_keep_their_template() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let year = Local::now().format("%Y").to_string();
+
+    let template = s.certificate_template().await.unwrap();
+    assert_eq!(template, CertificateTemplate::default());
+
+    let mut edit = template.clone();
+    edit.organization_name = "Polaris Metrology".into();
+    edit.number_pattern = "PM-{YYYY}-{SEQ}".into();
+    edit.number_digits = 3;
+    edit.next_number = 41;
+    let saved = s.update_certificate_template(&ctx(), edit).await.unwrap();
+    assert_eq!(saved.next_number, 41);
+
+    let first = s
+        .create_certificate(&ctx(), certificate_details(CertificateKind::External))
+        .await
+        .unwrap();
+    assert_eq!(first.summary.certificate_number, format!("PM-{year}-041"));
+    assert_eq!(first.summary.subject, "Acme Labs");
+    assert_eq!(first.template.organization_name, "Polaris Metrology");
+    assert_eq!(first.details.equipment.len(), 1);
+    assert_eq!(s.certificate_template().await.unwrap().next_number, 42);
+
+    // Internal certificates belong to an item.
+    let asset = s
+        .create_asset(&ctx(), asset_input(s, "DMM-9", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let mut internal = certificate_details(CertificateKind::Internal);
+    internal.asset_id = Some(asset.id);
+    internal.asset_tag = "DMM-9".into();
+    let second = s.create_certificate(&ctx(), internal).await.unwrap();
+    assert_eq!(second.summary.certificate_number, format!("PM-{year}-042"));
+    assert_eq!(
+        second.details.customer_name, "",
+        "internal certificates have no customer"
+    );
+
+    // A later template change doesn't alter what was issued.
+    let mut edit = s.certificate_template().await.unwrap();
+    edit.organization_name = "Renamed".into();
+    s.update_certificate_template(&ctx(), edit).await.unwrap();
+    let again = s.get_certificate(first.summary.id).await.unwrap();
+    assert_eq!(again.template.organization_name, "Polaris Metrology");
+    assert_eq!(again.details, first.details);
+
+    let all = s
+        .list_certificates(&CertificateFilter::default())
+        .await
+        .unwrap();
+    let numbers: Vec<_> = all.iter().map(|c| c.certificate_number.as_str()).collect();
+    assert_eq!(
+        numbers,
+        [
+            second.summary.certificate_number.as_str(),
+            first.summary.certificate_number.as_str()
+        ]
+    );
+    let found = s
+        .list_certificates(&CertificateFilter {
+            search: Some("acme".into()),
+            asset_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    let for_item = s
+        .list_certificates(&CertificateFilter {
+            search: None,
+            asset_id: Some(asset.id),
+        })
+        .await
+        .unwrap();
+    assert_eq!(for_item.len(), 1);
+
+    // Setting the counter back to a used number is caught when issuing.
+    let mut edit = s.certificate_template().await.unwrap();
+    edit.next_number = 41;
+    s.update_certificate_template(&ctx(), edit).await.unwrap();
+    let err = s
+        .create_certificate(&ctx(), certificate_details(CertificateKind::External))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Duplicate(_)), "{err:?}");
+    assert_eq!(
+        s.certificate_template().await.unwrap().next_number,
+        41,
+        "a failed issue keeps the counter"
+    );
+
+    // Details are checked before anything is written.
+    let mut bad = certificate_details(CertificateKind::External);
+    bad.customer_name = " ".into();
+    let err = s.create_certificate(&ctx(), bad).await.unwrap_err();
+    assert!(matches!(err, Error::Validation(ref e) if e[0].field == "customer_name"));
+
+    // Signers who are users get their saved signature; input can't supply one.
+    let me = s.list_users().await.unwrap()[0].clone();
+    assert_eq!(s.user_signature(me.id).await.unwrap(), None);
+    let png = "data:image/png;base64,iVBORw0KGgo=".to_string();
+    s.set_user_signature(&ctx(), me.id, Some(png.clone()))
+        .await
+        .unwrap();
+    assert_eq!(s.user_signature(me.id).await.unwrap(), Some(png.clone()));
+    let signers = s.certificate_signers().await.unwrap();
+    assert!(signers.iter().any(|u| u.id == me.id && u.has_signature));
+    let mut signed = certificate_details(CertificateKind::External);
+    signed.calibrated_by_id = Some(me.id);
+    signed.calibrated_by_signature = Some("data:image/png;base64,forged".into());
+    signed.approved_by_signature = Some("data:image/png;base64,forged".into());
+    let mut edit = s.certificate_template().await.unwrap();
+    edit.next_number = 50;
+    s.update_certificate_template(&ctx(), edit).await.unwrap();
+    let c = s.create_certificate(&ctx(), signed).await.unwrap();
+    assert_eq!(c.details.calibrated_by_signature, Some(png.clone()));
+    assert_eq!(
+        c.details.approved_by, "Tech",
+        "a blank approver is the calibrator"
+    );
+    assert_eq!(c.details.approved_by_id, Some(me.id));
+    assert_eq!(c.details.approved_by_signature, Some(png));
+    let err = s
+        .set_user_signature(&ctx(), me.id, Some("not an image".into()))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Validation(ref e) if e[0].field == "signature"));
+    s.set_user_signature(&ctx(), me.id, None).await.unwrap();
+    assert_eq!(s.user_signature(me.id).await.unwrap(), None);
+
+    let audit = s.list_audit(&AuditFilter::default()).await.unwrap();
+    assert!(audit.iter().any(|e| e.entity == AuditEntity::Certificate
+        && e.entity_label.as_deref() == Some(first.summary.certificate_number.as_str())));
 }

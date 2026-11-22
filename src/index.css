@@ -39,6 +39,11 @@
     overflow: visible !important;
     background: #fff !important;
   }
+  /* Menus, pop-ups and toasts open beside the app (outside #root); never print them. A
+     pop-up past the page edge would also make the browser shrink the page to fit. */
+  body > *:not(#root) {
+    display: none !important;
+  }
   .print-plain,
   .print-plain * {
     color: #000 !important;

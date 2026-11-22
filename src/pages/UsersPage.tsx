@@ -1,5 +1,6 @@
 import { Alert, Button, Modal, Table, toast } from "@heroui/react";
-import { KeyRound, Plus, Users } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { ImagePlus, KeyRound, Plus, Trash2, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Role } from "../bindings/Role";
 import type { User } from "../bindings/User";
@@ -171,6 +172,79 @@ function NewUserDialog({
   );
 }
 
+/**
+ * The user's signature, printed on certificates they calibrate or approve. Saved as soon
+ * as it's chosen or removed (separately from the rest of the dialog).
+ */
+function SignatureField({ user }: { user: User }) {
+  const [signature, setSignature] = useState<string | null>();
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setSignature(undefined);
+    api
+      .getUserSignature(user.id)
+      .then(setSignature)
+      .catch(() => setSignature(null));
+  }, [user.id]);
+
+  async function change(next: string | null) {
+    setBusy(true);
+    try {
+      await api.setUserSignature(user.id, next);
+      setSignature(next);
+      toast.success(next ? `Signature saved for ${user.display_name}` : `Signature removed for ${user.display_name}`);
+    } catch (e) {
+      toast.danger(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function choose() {
+    const path = await openDialog({
+      title: "Choose a signature image",
+      multiple: false,
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"] }],
+    });
+    if (typeof path !== "string") return;
+    try {
+      await change(await api.readImageFile(path));
+    } catch (e) {
+      toast.danger(e instanceof ApiError ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-separator pt-4">
+      <div>
+        <p className="text-sm font-medium">Signature</p>
+        <p className="text-xs text-muted">
+          Printed on certificates this user calibrates or approves. A scan or photo of a signature on white or a
+          transparent background works best. Saved straight away.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        {signature === undefined ? (
+          <span className="text-sm text-muted">Loading…</span>
+        ) : signature ? (
+          <img src={signature} alt="Signature" className="h-14 max-w-56 rounded bg-white object-contain p-1" />
+        ) : (
+          <span className="text-sm text-muted">No signature saved</span>
+        )}
+        <Button variant="secondary" size="sm" isDisabled={busy || signature === undefined} onPress={() => void choose()}>
+          <ImagePlus className="size-4" /> {signature ? "Replace…" : "Upload…"}
+        </Button>
+        {signature && (
+          <Button variant="tertiary" size="sm" isDisabled={busy} onPress={() => void change(null)}>
+            <Trash2 className="size-4" /> Remove
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EditUserDialog({
   user,
   onOpenChange,
@@ -252,6 +326,7 @@ function EditUserDialog({
           onChange={setActive}
           isDisabled={isMe}
         />
+        {user && <SignatureField user={user} />}
       </form>
     </DialogShell>
   );

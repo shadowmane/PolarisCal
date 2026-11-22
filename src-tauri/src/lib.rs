@@ -1,8 +1,10 @@
+mod certificates;
 mod commands;
 mod config;
 mod connection;
 mod export;
 mod files;
+mod pdf_merge;
 mod state;
 
 use std::path::PathBuf;
@@ -72,6 +74,16 @@ pub fn run() {
             connection::save_connection,
             connection::copy_database,
             export::export_xlsx,
+            certificates::get_certificate_template,
+            certificates::update_certificate_template,
+            certificates::list_certificates,
+            certificates::get_certificate,
+            certificates::create_certificate,
+            certificates::read_image_file,
+            certificates::list_certificate_signers,
+            certificates::get_user_signature,
+            certificates::set_user_signature,
+            certificates::save_certificate_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running PolarisCal");

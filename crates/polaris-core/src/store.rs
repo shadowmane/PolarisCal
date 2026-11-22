@@ -2,6 +2,10 @@ use async_trait::async_trait;
 
 use crate::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
 use crate::auth::{NewUser, User, UserCredentials, UserUpdate};
+use crate::certificate::{
+    Certificate, CertificateDetails, CertificateFilter, CertificateSigner, CertificateSummary,
+    CertificateTemplate,
+};
 use crate::model::AuditAction;
 use crate::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentFilter, CalibrationFilter,
@@ -168,6 +172,42 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         archived: bool,
     ) -> Result<CalibrationRecord>;
+
+    // --- Certificates --------------------------------------------------------------
+
+    /// The certificate template, with `next_number` set to the counter for the next
+    /// certificate (1 in a new year when the counter resets yearly).
+    async fn certificate_template(&self) -> Result<CertificateTemplate>;
+    /// Saves the template and the counter, audited as a settings change.
+    async fn update_certificate_template(
+        &self,
+        ctx: &WriteContext,
+        template: CertificateTemplate,
+    ) -> Result<CertificateTemplate>;
+    async fn list_certificates(
+        &self,
+        filter: &CertificateFilter,
+    ) -> Result<Vec<CertificateSummary>>;
+    async fn get_certificate(&self, id: Id) -> Result<Certificate>;
+    /// Issues a certificate: assigns the next number (formatted with the issue date),
+    /// stores the details with a copy of the template, and advances the counter, in one
+    /// transaction. A number already used fails with [`crate::Error::Duplicate`].
+    /// Active users, for picking who calibrated and approved a certificate.
+    async fn certificate_signers(&self) -> Result<Vec<CertificateSigner>>;
+    /// A user's saved signature image (a data URL), if any.
+    async fn user_signature(&self, user_id: Id) -> Result<Option<String>>;
+    /// Saves or (with None) removes a user's signature, audited as a change to the user.
+    async fn set_user_signature(
+        &self,
+        ctx: &WriteContext,
+        user_id: Id,
+        signature: Option<String>,
+    ) -> Result<()>;
+    async fn create_certificate(
+        &self,
+        ctx: &WriteContext,
+        details: CertificateDetails,
+    ) -> Result<Certificate>;
 
     // --- Moving data between databases -------------------------------------------
 
