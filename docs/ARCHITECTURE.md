@@ -90,13 +90,20 @@ All of these live in `polaris-core` so every backend applies them identically.
   |---|---|
   | Administrator | Everything: users, pick lists, settings, the full audit log |
   | Technician | Create, edit, and archive Instruments, Systems, and Calibration Records; add list entries |
-  | Viewer | Read everything, change nothing |
+  | Viewer | Read records, change nothing. The Lists page is hidden; Settings sections they can't change show a red lock |
 
   The UI hides what a role can't do, but every Tauri command checks the role itself
   (`require` in `src-tauri/src/commands.rs`), so hiding is never the protection.
 * **Passwords** are hashed with Argon2id (random salt per hash). Minimum 10 characters and not the
   username. Admins can force a change at next sign-in; new accounts default to that. A failed sign-in
   takes the same time whether or not the username exists.
+* **Password reset requests**: after a failed sign-in the screen says to ask an administrator; after
+  three for the same username it offers "Request password reset", which stamps
+  `users.reset_requested_at` (active accounts only; the command succeeds either way, so it can't
+  reveal which usernames exist). Administrators get a red count on Users in the sidebar and a badge
+  on the user's row until a new password is set. The sidebar checks the count every minute and on
+  window focus with `require_passive`, which checks the session like `require` but doesn't count as
+  activity, so it never keeps an idle session from locking.
 * **Sessions** live in memory in the desktop process. Each command re-reads the account, so a user an
   admin deactivates or demotes is affected on their next action, even on another computer sharing the
   database.
@@ -107,7 +114,7 @@ All of these live in `polaris-core` so every backend applies them identically.
   file asks for a reason. It's recommended, not required, and stored with the audit entry when given.
 * **Audit trail**: every write inserts an `audit_log` row in the same transaction: user, time, action,
   subject, reason, and a field-by-field list of old and new values built by `polaris_core::audit`.
-  Sign-ins (including failures), sign-outs, password changes and resets, and settings changes are
+  Sign-ins (including failures), sign-outs, password changes, resets and reset requests, and settings changes are
   logged too. In SQLite, triggers reject any `UPDATE` or `DELETE` on the table. Each item's page shows
   its own history; admins see the full log.
 
@@ -141,7 +148,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 15) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 16) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |

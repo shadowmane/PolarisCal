@@ -1,4 +1,4 @@
-import { Button, Modal, Toast, Tooltip, toast, useTheme } from "@heroui/react";
+import { Button, Modal, Toast, Tooltip, toast } from "@heroui/react";
 import {
   ArrowDownCircle,
   ClipboardCheck,
@@ -23,9 +23,11 @@ import { getVersion } from "@tauri-apps/api/app";
 import { NavLink, Outlet } from "react-router";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
-import { roleMeta } from "../lib/permissions";
+import { type Permission, roleMeta } from "../lib/permissions";
 import { setCurrencySymbol } from "../lib/currency";
 import { setDateFormat } from "../lib/dates";
+import { useResetRequestCount } from "../lib/resetRequests";
+import { useTheme } from "../lib/theme";
 import { setNoticeDismissed, useAvailableUpdate, useNoticeDismissed } from "../lib/updates";
 import { useAsync } from "../lib/useAsync";
 import { AboutDialog } from "./AboutDialog";
@@ -35,6 +37,8 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** A red count beside the label, with what it counts for screen readers. */
+  badge?: { count: number; label: string };
 }
 
 const MAIN_NAV: NavItem[] = [
@@ -45,10 +49,11 @@ const MAIN_NAV: NavItem[] = [
   { to: "/reports", label: "Reports", icon: FileChartColumn },
 ];
 
-const ADMIN_NAV: (NavItem & { adminOnly?: boolean })[] = [
-  { to: "/lists", label: "Lists", icon: ListChecks },
-  { to: "/users", label: "Users", icon: Users, adminOnly: true },
-  { to: "/audit", label: "Audit Log", icon: History, adminOnly: true },
+/** `need`: shown only to roles with that permission. */
+const ADMIN_NAV: (NavItem & { need?: Permission })[] = [
+  { to: "/lists", label: "Lists", icon: ListChecks, need: "edit_records" },
+  { to: "/users", label: "Users", icon: Users, need: "admin" },
+  { to: "/audit", label: "Audit Log", icon: History, need: "admin" },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -120,7 +125,7 @@ function NavSection({ title, items }: { title?: string; items: NavItem[] }) {
           {title}
         </div>
       )}
-      {items.map(({ to, label, icon: Icon }) => (
+      {items.map(({ to, label, icon: Icon, badge }) => (
         <NavLink
           key={to}
           to={to}
@@ -137,6 +142,15 @@ function NavSection({ title, items }: { title?: string; items: NavItem[] }) {
         >
           <Icon className="size-4 shrink-0" strokeWidth={2} />
           {label}
+          {badge && badge.count > 0 && (
+            <span
+              aria-label={badge.label}
+              title={badge.label}
+              className="ml-auto grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1.5 text-[11px] leading-none font-semibold text-danger-foreground"
+            >
+              {badge.count}
+            </span>
+          )}
         </NavLink>
       ))}
     </div>
@@ -177,10 +191,21 @@ function ConnectionStatus() {
 }
 
 export function AppShell() {
-  const { resolvedTheme, setTheme } = useTheme("system");
+  const { resolvedTheme, setTheme } = useTheme();
   const dark = resolvedTheme === "dark";
   const { can } = useAuth();
-  const adminNav = ADMIN_NAV.filter((item) => !item.adminOnly || can("admin"));
+  const resetRequests = useResetRequestCount(can("admin"));
+  const adminNav = ADMIN_NAV.filter((item) => !item.need || can(item.need)).map((item) =>
+    item.to === "/users"
+      ? {
+          ...item,
+          badge: {
+            count: resetRequests,
+            label: `${resetRequests} password reset request${resetRequests === 1 ? "" : "s"}`,
+          },
+        }
+      : item,
+  );
   // Viewers can't generate certificates, but can look through the issued ones.
   const mainNav = MAIN_NAV.map((item) =>
     item.to === "/certificates/new" && !can("edit_records") ? { ...item, to: "/certificates", label: "Certificates" } : item,

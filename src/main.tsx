@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { createHashRouter, RouterProvider } from "react-router";
 import { AppShell } from "./components/AppShell";
 import "./index.css";
+import "./lib/theme";
 import { AuthProvider } from "./lib/auth";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { AssetFormPage } from "./pages/AssetFormPage";

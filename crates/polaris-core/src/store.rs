@@ -58,8 +58,14 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         input: UserUpdate,
     ) -> Result<User>;
+    /// Records a password reset request from the sign-in screen for the active account with
+    /// this username (case-insensitive), for administrators to act on. Does nothing for an
+    /// unknown or inactive account, or one that already has a request waiting, so the
+    /// caller can't tell which accounts exist.
+    async fn request_password_reset(&self, username: &str) -> Result<()>;
     /// Sets a new password. When `ctx.actor` is the user themself it is a password change
-    /// (and clears `must_change_password`); otherwise an admin reset.
+    /// (and clears `must_change_password`); otherwise an admin reset. Either way any
+    /// password reset request is cleared.
     async fn set_password(
         &self,
         ctx: &WriteContext,

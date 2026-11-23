@@ -117,6 +117,13 @@ function LookupTable({ kind }: { kind: LookupKind }) {
 
 export function ListsPage() {
   const [kind, setKind] = useState<LookupKind>("location");
+  const { can } = useAuth();
+
+  if (!can("edit_records")) {
+    return (
+      <ErrorAlert error={{ kind: "forbidden", message: "Only technicians and administrators can open the lists." }} />
+    );
+  }
 
   return (
     <>

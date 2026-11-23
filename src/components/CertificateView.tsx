@@ -84,11 +84,13 @@ function Signature({
 }) {
   return (
     <div style={{ flex: 1 }}>
-      {/* The signature sits on the line, like a hand-signed one. */}
+      {/* The signature sits on the line, like a hand-signed one. Scans often have a white
+          background rather than a transparent one, so the white is blended away and the line
+          is drawn on top of the image rather than underneath it. */}
       <div
         style={{
+          position: "relative",
           height: "0.55in",
-          borderBottom: "1px solid #222",
           display: "flex",
           alignItems: "flex-end",
           paddingLeft: "0.1in",
@@ -98,9 +100,19 @@ function Signature({
           <img
             src={signature}
             alt=""
-            style={{ maxHeight: "0.6in", maxWidth: "2.4in", objectFit: "contain", marginBottom: "-0.06in" }}
+            style={{
+              maxHeight: "0.6in",
+              maxWidth: "2.4in",
+              objectFit: "contain",
+              marginBottom: "-0.06in",
+              mixBlendMode: "multiply",
+            }}
           />
         )}
+        <div
+          aria-hidden
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, borderBottom: "1px solid #222" }}
+        />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: "0.04in", fontSize: "8.5pt" }}>
         <span style={{ color: "#555" }}>{label}</span>

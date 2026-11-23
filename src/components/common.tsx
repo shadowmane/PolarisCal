@@ -1,4 +1,5 @@
-import { Alert, Button, Chip, Spinner } from "@heroui/react";
+import { Alert, Button, Card, Chip, Spinner } from "@heroui/react";
+import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import type { ApiError } from "../lib/api";
 import { useCurrencySymbol } from "../lib/currency";
@@ -21,6 +22,29 @@ export function PageHeader({
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </header>
+  );
+}
+
+/** A card title with a red lock in front when the signed-in user can't change the section. */
+export function LockableTitle({
+  locked,
+  children,
+  why = "Only an administrator can change this.",
+}: {
+  locked: boolean;
+  children: ReactNode;
+  why?: string;
+}) {
+  return (
+    <Card.Title className="flex items-center gap-2">
+      {locked && (
+        <span title={why} className="inline-flex shrink-0">
+          <Lock className="size-4 text-danger" strokeWidth={2.25} aria-hidden />
+          <span className="sr-only">Locked. {why}</span>
+        </span>
+      )}
+      {children}
+    </Card.Title>
   );
 }
 

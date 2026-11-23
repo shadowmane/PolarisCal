@@ -89,6 +89,8 @@ export const api = {
   authStatus: () => call<AuthStatus>("auth_status"),
   setupAdmin: (input: NewUser) => call<User>("setup_admin", { input }),
   signIn: (username: string, password: string) => call<User>("sign_in", { username, password }),
+  /** From the sign-in screen; succeeds whether or not the account exists. */
+  requestPasswordReset: (username: string) => call<void>("request_password_reset", { username }),
   signOut: () => call<void>("sign_out"),
   lockSession: () => call<void>("lock_session"),
   unlockSession: (password: string) => call<User>("unlock_session", { password }),
@@ -103,6 +105,8 @@ export const api = {
     call<User>("update_user", { id, expected_version: expectedVersion, input }),
   resetPassword: (id: number, newPassword: string, mustChange: boolean) =>
     call<User>("reset_password", { id, new_password: newPassword, must_change: mustChange }),
+  /** Accounts waiting for a password reset. Checked in the background: not activity. */
+  passwordResetRequests: () => call<number>("password_reset_requests"),
   getSettings: () => call<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) => call<AppSettings>("update_settings", { settings }),
   listAudit: (filter: Partial<AuditFilter> = {}) =>

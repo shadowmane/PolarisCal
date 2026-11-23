@@ -158,6 +158,8 @@ text_enum!(
         PasswordChange => "password_change",
         /// An administrator set a new password for someone else.
         PasswordReset => "password_reset",
+        /// Someone asked for a password reset from the sign-in screen.
+        PasswordResetRequest => "password_reset_request",
         /// All data was copied from this database to another one.
         Export => "export",
         /// This database was filled with data copied from another one.

@@ -11,14 +11,15 @@ import { useAuth } from "../lib/auth";
 import { nextCertificateNumber, sampleCertificateDetails } from "../lib/certificates";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
 import { CertificatePreview } from "./CertificateView";
-import { ErrorAlert, Loading } from "./common";
+import { ErrorAlert, Loading, LockableTitle } from "./common";
 import { NumberInput, SelectInput, SwitchInput, TextAreaInput, TextInput } from "./fields";
 
 function Group({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
+  const { can } = useAuth();
   return (
     <Card>
       <Card.Header>
-        <Card.Title>{title}</Card.Title>
+        <LockableTitle locked={!can("admin")}>{title}</LockableTitle>
         {description && <Card.Description>{description}</Card.Description>}
       </Card.Header>
       <Card.Content className="grid grid-cols-1 gap-4 md:grid-cols-2">{children}</Card.Content>

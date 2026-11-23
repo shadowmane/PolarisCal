@@ -899,7 +899,7 @@ async fn fetch_lookup(conn: &mut Conn, kind: LookupKind, id: Id) -> Result<Looku
 
 const USER_COLUMNS: &str =
     "id, username, display_name, email, role, is_active, must_change_password,
-                            last_sign_in_at, row_version, created_at, updated_at";
+                            last_sign_in_at, reset_requested_at, row_version, created_at, updated_at";
 
 fn map_user(row: &Row) -> Result<User> {
     Ok(User {
@@ -911,6 +911,7 @@ fn map_user(row: &Row) -> Result<User> {
         is_active: row.get("is_active")?,
         must_change_password: row.get("must_change_password")?,
         last_sign_in_at: row.get("last_sign_in_at")?,
+        reset_requested_at: row.get("reset_requested_at")?,
         row_version: row.get("row_version")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -1398,6 +1399,43 @@ impl Store for SqlStore {
         Ok(())
     }
 
+    async fn request_password_reset(&self, username: &str) -> Result<()> {
+        let mut tx = self.begin().await?;
+        let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE LOWER(username) = LOWER(?1)");
+        let Some(row) = tx.fetch_optional(&sql, params![username.trim()]).await? else {
+            return Ok(());
+        };
+        let before = map_user(&row)?;
+        if !before.is_active || before.reset_requested_at.is_some() {
+            return Ok(());
+        }
+        tx.execute(
+            "UPDATE users SET reset_requested_at = ?2 WHERE id = ?1",
+            params![before.id, now()],
+        )
+        .await?;
+        let after = fetch_user(&mut tx, before.id).await?;
+        // Nobody is signed in, so the entry is in the name of the account it's about (as
+        // a failed sign-in is in the name of the username tried).
+        write_audit(
+            &mut tx,
+            NewAuditEntry {
+                user_id: None,
+                username: after.username.clone(),
+                action: AuditAction::PasswordResetRequest,
+                entity: AuditEntity::User,
+                entity_id: Some(after.id),
+                asset_id: None,
+                entity_label: Some(after.username.clone()),
+                reason: None,
+                changes: diff(&user_snapshot(&before), &user_snapshot(&after)),
+            },
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn record_sign_out(&self, actor: &Actor) -> Result<()> {
         let mut conn = self.conn().await?;
         let ctx = WriteContext::new(actor.clone(), None);
@@ -1514,7 +1552,7 @@ impl Store for SqlStore {
         let must_change = !own && must_change;
         tx.execute(
             "UPDATE users SET password_hash = ?2, must_change_password = ?3, updated_at = ?4,
-                              row_version = row_version + 1
+                              reset_requested_at = NULL, row_version = row_version + 1
              WHERE id = ?1",
             params![user_id, hash_password(new_password)?, must_change, now()],
         )

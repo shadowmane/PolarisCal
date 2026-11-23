@@ -26,6 +26,9 @@ pub struct User {
     /// Set when an admin creates the account or resets the password.
     pub must_change_password: bool,
     pub last_sign_in_at: Option<DateTime<Utc>>,
+    /// When the user asked for a password reset from the sign-in screen; cleared when a
+    /// new password is set.
+    pub reset_requested_at: Option<DateTime<Utc>>,
     pub row_version: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

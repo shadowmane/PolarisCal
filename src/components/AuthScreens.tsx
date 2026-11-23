@@ -204,10 +204,32 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   );
 }
 
+/** Failed attempts before the sign-in screen offers to ask for a password reset. */
+const MISSES_BEFORE_RESET_REQUEST = 3;
+
 export function SignInScreen({ onDone }: { onDone: () => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const { busy, message, setMessage, run } = useSubmit();
+  // Wrong passwords so far, in all and for each username (a reset request is for one account).
+  const [misses, setMisses] = useState<Record<string, number>>({});
+  const [requesting, setRequesting] = useState(false);
+  const [requested, setRequested] = useState<string[]>([]);
+  const account = username.trim().toLowerCase();
+  const anyMisses = Object.keys(misses).length > 0;
+  const canRequest = (misses[account] ?? 0) >= MISSES_BEFORE_RESET_REQUEST;
+
+  async function requestReset() {
+    setRequesting(true);
+    try {
+      await api.requestPasswordReset(username);
+      setRequested((r) => [...r, account]);
+    } catch (e) {
+      setMessage(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setRequesting(false);
+    }
+  }
 
   return (
     <AuthLayout title="Sign in">
@@ -219,7 +241,14 @@ export function SignInScreen({ onDone }: { onDone: () => void }) {
           e.preventDefault();
           if (!username.trim() || !password) return setMessage("Enter your username and password.");
           void run(async () => {
-            await api.signIn(username, password);
+            try {
+              await api.signIn(username, password);
+            } catch (e) {
+              if (e instanceof ApiError && e.kind === "unauthenticated") {
+                setMisses((m) => ({ ...m, [account]: (m[account] ?? 0) + 1 }));
+              }
+              throw e;
+            }
             onDone();
           });
         }}
@@ -236,7 +265,19 @@ export function SignInScreen({ onDone }: { onDone: () => void }) {
           Sign in
         </Button>
       </Form>
-      <p className="mt-4 text-center text-xs text-muted">Forgot your password? Ask an administrator to reset it.</p>
+      {anyMisses && (
+        <p className="mt-4 text-center text-xs text-muted">Forgot your password? Ask an administrator to reset it.</p>
+      )}
+      {canRequest &&
+        (requested.includes(account) ? (
+          <p role="status" className="mt-3 text-center text-xs text-success">
+            Request sent. An administrator will set a temporary password for you.
+          </p>
+        ) : (
+          <Button variant="secondary" fullWidth className="mt-3" isPending={requesting} onPress={() => void requestReset()}>
+            Request password reset
+          </Button>
+        ))}
     </AuthLayout>
   );
 }

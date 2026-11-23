@@ -102,6 +102,7 @@ export const auditActionMeta: Record<AuditAction, { label: string; color: ChipCo
   sign_out: { label: "Signed out", color: "default" },
   password_change: { label: "Password changed", color: "default" },
   password_reset: { label: "Password reset", color: "warning" },
+  password_reset_request: { label: "Password reset requested", color: "danger" },
   export: { label: "Data copied out", color: "default" },
   import: { label: "Data copied in", color: "accent" },
 };

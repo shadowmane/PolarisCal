@@ -221,7 +221,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 15);
+    assert_eq!(info.schema_version, 16);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -1724,6 +1724,65 @@ async fn sign_ins_are_audited() {
             (AuditAction::SignIn, "admin", Some(1)),
         ]
     );
+}
+
+#[tokio::test]
+async fn password_reset_requests_wait_for_a_new_password() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let tech = s
+        .create_user(&ctx(), new_user("jkim", Role::Technician))
+        .await
+        .unwrap();
+    let gone = s
+        .create_user(&ctx(), new_user("gone", Role::Viewer))
+        .await
+        .unwrap();
+    s.update_user(
+        &ctx(),
+        gone.id,
+        gone.row_version,
+        UserUpdate {
+            display_name: gone.display_name.clone(),
+            email: None,
+            role: Role::Viewer,
+            is_active: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Any capitalization; asking twice is one request. Unknown and inactive accounts
+    // succeed too, but nothing is recorded.
+    s.request_password_reset(" JKim ").await.unwrap();
+    let requested = s.get_user(tech.id).await.unwrap().reset_requested_at;
+    assert!(requested.is_some());
+    s.request_password_reset("jkim").await.unwrap();
+    assert_eq!(s.get_user(tech.id).await.unwrap().reset_requested_at, requested);
+    s.request_password_reset("nobody").await.unwrap();
+    s.request_password_reset("gone").await.unwrap();
+    assert!(s.get_user(gone.id).await.unwrap().reset_requested_at.is_none());
+
+    let requests: Vec<_> = s
+        .list_audit(&AuditFilter {
+            entity: Some(AuditEntity::User),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.action == AuditAction::PasswordResetRequest)
+        .map(|e| (e.username, e.user_id, e.entity_id))
+        .collect();
+    assert_eq!(requests, [("jkim".to_string(), None, Some(tech.id))]);
+
+    // An administrator's reset clears it.
+    let reset = s
+        .set_password(&ctx(), tech.id, "a fresh temporary one", true)
+        .await
+        .unwrap();
+    assert!(reset.reset_requested_at.is_none());
+    assert!(reset.must_change_password);
 }
 
 #[tokio::test]

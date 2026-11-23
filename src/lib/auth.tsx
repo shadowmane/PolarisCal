@@ -1,7 +1,6 @@
 // Session state for the whole app: decides whether to show setup, sign-in, a forced
 // password change, the lock screen, or the app itself, and runs the idle auto-lock.
 
-import { useTheme } from "@heroui/react";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { AuthStatus } from "../bindings/AuthStatus";
 import type { User } from "../bindings/User";
@@ -73,7 +72,6 @@ function useIdleLock(enabled: boolean, minutes: number, onLock: () => void) {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  useTheme("system");
   const [status, setStatus] = useState<AuthStatus>();
   const [error, setError] = useState<ApiError>();
 

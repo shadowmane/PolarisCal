@@ -1,4 +1,4 @@
-import { Alert, Button, Modal, Table, toast } from "@heroui/react";
+import { Alert, Button, Chip, Modal, Table, toast } from "@heroui/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ImagePlus, KeyRound, Plus, Trash2, Users } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -11,6 +11,7 @@ import { useAuth } from "../lib/auth";
 import { EMPTY, formatDateTime } from "../lib/format";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
 import { ROLES, roleMeta } from "../lib/permissions";
+import { resetRequestsChanged } from "../lib/resetRequests";
 import { useAsync } from "../lib/useAsync";
 
 const MIN_PASSWORD = 10;
@@ -335,9 +336,11 @@ function EditUserDialog({
 function ResetPasswordDialog({
   user,
   onOpenChange,
+  onSaved,
 }: {
   user: User | null;
   onOpenChange: (o: boolean) => void;
+  onSaved: () => void;
 }) {
   const [password, setPassword] = useState("");
   const [mustChange, setMustChange] = useState(true);
@@ -361,6 +364,7 @@ function ResetPasswordDialog({
       await api.resetPassword(user.id, password, mustChange);
       toast.success(`Password reset for ${user.display_name}`);
       onOpenChange(false);
+      onSaved();
     } catch (e) {
       applyError(e, setErrors, setMessage);
     } finally {
@@ -469,9 +473,18 @@ export function UsersPage() {
                       </div>
                     </Table.Cell>
                     <Table.Cell>
-                      <Button size="sm" variant="ghost" onPress={() => setResetting(u)}>
-                        <KeyRound className="size-4" /> Reset password
-                      </Button>
+                      <div className="flex items-center justify-between gap-3">
+                        <Button size="sm" variant="ghost" onPress={() => setResetting(u)}>
+                          <KeyRound className="size-4" /> Reset password
+                        </Button>
+                        {u.is_active && u.reset_requested_at && (
+                          <span title={`Requested ${formatDateTime(u.reset_requested_at)}`}>
+                            <Chip size="sm" variant="primary" color="danger">
+                              User requests password reset
+                            </Chip>
+                          </span>
+                        )}
+                      </div>
                     </Table.Cell>
                   </Table.Row>
                 )}
@@ -483,7 +496,14 @@ export function UsersPage() {
 
       <NewUserDialog isOpen={adding} onOpenChange={setAdding} onSaved={reload} />
       <EditUserDialog user={editing} onOpenChange={(o) => !o && setEditing(null)} onSaved={reload} />
-      <ResetPasswordDialog user={resetting} onOpenChange={(o) => !o && setResetting(null)} />
+      <ResetPasswordDialog
+        user={resetting}
+        onOpenChange={(o) => !o && setResetting(null)}
+        onSaved={() => {
+          reload();
+          resetRequestsChanged();
+        }}
+      />
     </>
   );
 }

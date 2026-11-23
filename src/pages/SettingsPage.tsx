@@ -1,10 +1,10 @@
-import { Button, Card, Tabs, toast, ToggleButton, ToggleButtonGroup, useTheme } from "@heroui/react";
+import { Button, Card, Tabs, toast, ToggleButton, ToggleButtonGroup } from "@heroui/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowDownCircle, ArrowRightLeft, Database, FolderOpen, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import type { AppSettings } from "../bindings/AppSettings";
 import { type ReactNode, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
-import { ErrorAlert, Loading, PageHeader } from "../components/common";
+import { ErrorAlert, Loading, LockableTitle, PageHeader } from "../components/common";
 import { CertificateTemplateSettings } from "../components/CertificateTemplateSettings";
 import { ConnectionDialog, CopyDatabaseDialog } from "../components/DatabaseForms";
 import { STORE_BACKEND_NAMES } from "../lib/database";
@@ -17,6 +17,7 @@ import { checkForUpdate, describeCheckError, installUpdate, useAvailableUpdate }
 import { useAuth } from "../lib/auth";
 import { fieldErrors } from "../lib/forms";
 import { roleMeta } from "../lib/permissions";
+import { type ThemeChoice, useTheme } from "../lib/theme";
 
 function SecurityCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
   const { can, idleLockMinutes, refresh, user } = useAuth();
@@ -47,7 +48,7 @@ function SecurityCard({ settings, onSaved }: { settings?: AppSettings; onSaved: 
   return (
     <Card>
       <Card.Header>
-        <Card.Title>Security</Card.Title>
+        <LockableTitle locked={!isAdmin}>Security</LockableTitle>
         <Card.Description>
           Signed in as {user.display_name} ({user.username}), {roleMeta[user.role].label}.
         </Card.Description>
@@ -353,7 +354,7 @@ function AttachmentsFolderCard({ settings, onSaved }: { settings?: AppSettings; 
   return (
     <Card>
       <Card.Header>
-        <Card.Title>Attachments folder</Card.Title>
+        <LockableTitle locked={!isAdmin}>Attachments folder</LockableTitle>
         <Card.Description>
           Certificates and other files are copied here, in a folder per item. Use a network share (for example
           {EXAMPLE_SHARE}) that everyone using PolarisCal can reach with the same path.
@@ -421,7 +422,7 @@ const SETTINGS_TABS = ["appearance", "certificate", "administration"] as const;
 
 export function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.appInfo(), []);
-  const { theme, setTheme } = useTheme("system");
+  const { theme, setTheme } = useTheme();
   const settings = useAsync(() => api.getSettings(), []);
   const { can, refresh } = useAuth();
   const isAdmin = can("admin");
@@ -474,7 +475,7 @@ export function SettingsPage() {
                   selectedKeys={[theme]}
                   onSelectionChange={(keys) => {
                     const [next] = [...keys];
-                    if (next) setTheme(String(next));
+                    if (next) setTheme(String(next) as ThemeChoice);
                   }}
                   aria-label="Theme"
                 >
@@ -502,7 +503,7 @@ export function SettingsPage() {
             {data && (
               <Card>
                 <Card.Header>
-                  <Card.Title>Database connection</Card.Title>
+                  <LockableTitle locked={!isAdmin}>Database connection</LockableTitle>
                   <Card.Description>
                     {isAdmin
                       ? "Where this computer's PolarisCal keeps its data: a SQLite file, or a PostgreSQL, MySQL/MariaDB, or SQL Server database."

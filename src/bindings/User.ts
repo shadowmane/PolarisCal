@@ -8,4 +8,9 @@ export type User = { id: number, username: string, display_name: string, email: 
 /**
  * Set when an admin creates the account or resets the password.
  */
-must_change_password: boolean, last_sign_in_at: string | null, row_version: number, created_at: string, updated_at: string, };
+must_change_password: boolean, last_sign_in_at: string | null, 
+/**
+ * When the user asked for a password reset from the sign-in screen; cleared when a
+ * new password is set.
+ */
+reset_requested_at: string | null, row_version: number, created_at: string, updated_at: string, };

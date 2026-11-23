@@ -112,6 +112,20 @@ pub(crate) enum Need {
 /// Checks the session and role, refreshes the account from the database, and
 /// records activity. Returns the store and the current user.
 pub(crate) async fn require(state: &AppState, need: Need) -> CmdResult<(Arc<dyn Store>, User)> {
+    check_session(state, need, true).await
+}
+
+/// Like [`require`], but doesn't count as activity, for checks the UI makes on its own in
+/// the background (they mustn't keep an idle session from locking).
+async fn require_passive(state: &AppState, need: Need) -> CmdResult<(Arc<dyn Store>, User)> {
+    check_session(state, need, false).await
+}
+
+async fn check_session(
+    state: &AppState,
+    need: Need,
+    activity: bool,
+) -> CmdResult<(Arc<dyn Store>, User)> {
     let store = store(state)?;
     let timeout = state.idle_timeout();
     let user_id = state.with_session(|slot| {
@@ -145,7 +159,9 @@ pub(crate) async fn require(state: &AppState, need: Need) -> CmdResult<(Arc<dyn 
     state.with_session(|slot| {
         if let Some(session) = slot {
             session.user = user.clone();
-            session.last_activity = Instant::now();
+            if activity {
+                session.last_activity = Instant::now();
+            }
         }
     });
 
@@ -335,6 +351,17 @@ pub async fn sign_in(
     Ok(user)
 }
 
+/// From the sign-in screen, after failed attempts: asks the administrators to reset this
+/// account's password. Succeeds whether or not the account exists, so it can't be used to
+/// find out which usernames are real.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn request_password_reset(state: State<'_, AppState>, username: String) -> CmdResult<()> {
+    if username.trim().is_empty() {
+        return Err(Error::validation("username", "Enter your username.").into());
+    }
+    Ok(store(&state)?.request_password_reset(&username).await?)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sign_out(state: State<'_, AppState>) -> CmdResult<()> {
     let user = state.with_session(|slot| slot.take().map(|s| s.user));
@@ -420,6 +447,19 @@ pub async fn change_password(
 pub async fn list_users(state: State<'_, AppState>) -> CmdResult<Vec<User>> {
     let (store, _) = require(&state, Need::Admin).await?;
     Ok(store.list_users().await?)
+}
+
+/// How many active accounts are waiting for a password reset, for the badge on Users. The
+/// sidebar checks this in the background, so it doesn't count as activity.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn password_reset_requests(state: State<'_, AppState>) -> CmdResult<usize> {
+    let (store, _) = require_passive(&state, Need::Admin).await?;
+    Ok(store
+        .list_users()
+        .await?
+        .iter()
+        .filter(|u| u.is_active && u.reset_requested_at.is_some())
+        .count())
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -976,6 +1016,19 @@ mod tests {
             ErrorKind::Locked
         );
         assert!(state.with_session(|s| s.as_ref().unwrap().locked));
+    }
+
+    #[tokio::test]
+    async fn background_checks_dont_keep_the_session_awake() {
+        let (state, _dir, admin, _viewer) = state_with_users().await;
+        start_session(&state, &admin);
+        let idle = Duration::from_secs(10 * 60);
+        state.with_session(|s| s.as_mut().unwrap().last_activity = Instant::now() - idle);
+        assert!(require_passive(&state, Need::Admin).await.is_ok());
+        assert!(state.with_session(|s| s.as_ref().unwrap().last_activity.elapsed() >= idle));
+        // A real command still counts as activity.
+        assert!(require(&state, Need::Admin).await.is_ok());
+        assert!(state.with_session(|s| s.as_ref().unwrap().last_activity.elapsed() < idle));
     }
 
     #[tokio::test]

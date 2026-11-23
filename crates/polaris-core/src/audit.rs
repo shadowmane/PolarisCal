@@ -281,6 +281,10 @@ pub fn user_snapshot(u: &User) -> Snapshot {
         ("Role", Some(u.role.to_string())),
         ("Active", yes_no(u.is_active)),
         ("Must change password", yes_no(u.must_change_password)),
+        (
+            "Password reset requested",
+            yes_no(u.reset_requested_at.is_some()),
+        ),
     ]
 }
 
