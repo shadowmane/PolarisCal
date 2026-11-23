@@ -97,6 +97,8 @@ export interface AssetForm {
   first_cal_date: string | null;
   last_cal_date: string | null;
   notes: string;
+  /** Systems only: the schedule comes from its Instruments. */
+  cal_aggregate: boolean;
 }
 
 export function emptyAssetForm(defaults: Partial<AssetForm> = {}): AssetForm {
@@ -120,6 +122,7 @@ export function emptyAssetForm(defaults: Partial<AssetForm> = {}): AssetForm {
     first_cal_date: null,
     last_cal_date: null,
     notes: "",
+    cal_aggregate: false,
     ...defaults,
   };
 }
@@ -145,6 +148,7 @@ export function assetToForm(a: Asset): AssetForm {
     first_cal_date: a.first_cal_date,
     last_cal_date: a.last_cal_date_entered,
     notes: a.notes ?? "",
+    cal_aggregate: a.cal_aggregate,
   };
 }
 
@@ -170,10 +174,13 @@ export function formToAssetInput(f: AssetForm): Converted<AssetInput> {
   if (!f.description.trim()) errors.description = "Description is required.";
   if (f.status_id == null) errors.status_id = "Status is required.";
   const hasInterval = f.interval_value != null && !Number.isNaN(f.interval_value);
-  if (hasInterval && (f.interval_value! < 1 || !Number.isInteger(f.interval_value))) {
+  // An aggregate System's interval field is hidden and unused, so it isn't checked.
+  if (!(f.kind === "system" && f.cal_aggregate) && hasInterval && (f.interval_value! < 1 || !Number.isInteger(f.interval_value))) {
     errors.cal_interval = "Interval must be a whole number of at least 1.";
   }
   if (Object.keys(errors).length > 0) return { ok: false, errors };
+  // Only a System can take its schedule from its Instruments.
+  const aggregate = f.kind === "system" && f.cal_aggregate;
 
   return {
     ok: true,
@@ -190,13 +197,15 @@ export function formToAssetInput(f: AssetForm): Converted<AssetInput> {
       owner_id: f.owner_id,
       status_id: f.status_id!,
       warranty_end_date: f.warranty_end_date,
-      cal_interval: hasInterval
-        ? { value: f.interval_value!, unit: f.interval_unit, end_of_month: f.interval_end_of_month }
-        : null,
+      cal_interval:
+        hasInterval && !aggregate
+          ? { value: f.interval_value!, unit: f.interval_unit, end_of_month: f.interval_end_of_month }
+          : null,
       in_service_date: f.in_service_date,
-      first_cal_date: f.first_cal_date,
-      last_cal_date: f.last_cal_date,
+      first_cal_date: aggregate ? null : f.first_cal_date,
+      last_cal_date: aggregate ? null : f.last_cal_date,
       notes: optionalText(f.notes),
+      cal_aggregate: aggregate,
     },
   };
 }

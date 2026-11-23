@@ -31,7 +31,7 @@ import {
   dueStatusMeta,
   EMPTY,
   formatDate,
-  formatInterval,
+  formatSchedule,
 } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
@@ -53,7 +53,11 @@ function ChildrenCard({ system }: { system: Asset }) {
       <Card.Header className="flex-row items-center justify-between">
         <div>
           <Card.Title>Contained instruments</Card.Title>
-          <Card.Description>Each instrument keeps its own calibration schedule.</Card.Description>
+          <Card.Description>
+            {system.cal_aggregate
+              ? "Each instrument keeps its own calibration schedule; this System is due when the soonest of them is."
+              : "Each instrument keeps its own calibration schedule."}
+          </Card.Description>
         </div>
         {!system.is_archived && can("edit_records") && (
           <Button
@@ -399,7 +403,7 @@ export function AssetDetailPage() {
               <Detail label="Next calibration">
                 <span className="text-base font-semibold">{formatDate(asset.next_cal_date)}</span>
               </Detail>
-              <Detail label="Interval">{formatInterval(asset.cal_interval)}</Detail>
+              <Detail label="Interval">{formatSchedule(asset)}</Detail>
               <Detail label="Last calibration">{formatDate(asset.last_cal_date)}</Detail>
               <Detail label="First calibration">{formatDate(asset.first_cal_date)}</Detail>
               <Detail label="Put into service">{formatDate(asset.in_service_date)}</Detail>

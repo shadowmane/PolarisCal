@@ -23,6 +23,11 @@ export function formatCents(cents: number | null | undefined): string {
   return cents == null ? EMPTY : formatMoney(cents / 100);
 }
 
+/** The interval, or "From its Instruments" for an aggregate System. */
+export function formatSchedule(a: { cal_interval: CalInterval | null; cal_aggregate: boolean }): string {
+  return a.cal_aggregate ? "From its Instruments" : formatInterval(a.cal_interval);
+}
+
 export function formatInterval(interval: CalInterval | null): string {
   if (!interval) return EMPTY;
   const unit = interval.unit === "months" ? "month" : "day";

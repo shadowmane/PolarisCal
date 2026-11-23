@@ -6,7 +6,7 @@ import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { ColumnKind } from "../bindings/ColumnKind";
 import type { ExportCell } from "../bindings/ExportCell";
 import type { ExportSheet } from "../bindings/ExportSheet";
-import { conditionReceivedMeta, conditionReturnedMeta, formatInterval } from "./format";
+import { conditionReceivedMeta, conditionReturnedMeta, formatInterval, formatSchedule } from "./format";
 
 export interface ReportColumn {
   header: string;
@@ -233,7 +233,7 @@ export function registerReport(assets: Asset[], includeArchived: boolean, note =
       t(a.department_name),
       t(a.owner_name),
       a.is_archived ? `${a.status_name} (archived)` : a.status_name,
-      a.cal_interval ? formatInterval(a.cal_interval) : null,
+      a.cal_aggregate ? formatSchedule(a) : a.cal_interval ? formatInterval(a.cal_interval) : null,
       t(a.in_service_date),
       t(a.warranty_end_date),
       t(a.first_cal_date),

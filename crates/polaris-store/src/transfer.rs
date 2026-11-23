@@ -134,6 +134,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("next_cal_date", Date),
             ("cal_extended", Bool),
             ("previous_status_id", Int),
+            ("cal_aggregate", Bool),
             ("notes", Text),
             ("is_archived", Bool),
             ("row_version", Int),

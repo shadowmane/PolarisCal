@@ -192,13 +192,14 @@ pub struct DueSummary {
 }
 
 impl DueSummary {
-    /// Summarizes non-archived assets. Callers pass the active asset list.
+    /// Summarizes non-archived assets. Callers pass the active asset list. Aggregate
+    /// Systems are left out: their Instruments are counted instead.
     pub fn from_assets(assets: &[Asset], today: NaiveDate) -> Self {
         let mut s = DueSummary {
             today,
             ..Default::default()
         };
-        for a in assets.iter().filter(|a| !a.is_archived) {
+        for a in assets.iter().filter(|a| !a.is_archived && !a.cal_aggregate) {
             s.total += 1;
             let Some(bucket) = DueBucket::of(a, today) else {
                 s.not_tracked += 1;
@@ -432,6 +433,7 @@ mod tests {
             status_name: "Active".into(),
             status_role: None,
             previous_status_id: None,
+            cal_aggregate: false,
             warranty_end_date: None,
             cal_interval: interval,
             in_service_date: None,

@@ -44,6 +44,7 @@ function asset(id: number, tag: string, over: Partial<Asset> = {}): Asset {
     last_cal_date_entered: null,
     next_cal_date: null,
     calibration_extended: false,
+    cal_aggregate: false,
     due_status: "no_schedule",
     child_count: 0,
     notes: null,

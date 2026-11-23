@@ -15,4 +15,9 @@ first_cal_date: string | null,
  * last calibration date only while it has no calibration records; afterwards
  * the latest record's date wins, but this value is kept.
  */
-last_cal_date: string | null, notes: string | null, };
+last_cal_date: string | null, notes: string | null, 
+/**
+ * Systems only: take the schedule from the System's Instruments (no interval or
+ * calibration dates of its own).
+ */
+cal_aggregate: boolean, };

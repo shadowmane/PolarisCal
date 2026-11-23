@@ -181,6 +181,7 @@ async fn asset_input(store: &dyn Store, tag: &str, kind: AssetKind) -> AssetInpu
         first_cal_date: None,
         last_cal_date: None,
         notes: None,
+        cal_aggregate: false,
     }
 }
 
@@ -220,7 +221,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 12);
+    assert_eq!(info.schema_version, 15);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -238,7 +239,8 @@ async fn fresh_database_is_migrated_and_seeded() {
             "Out for Calibration",
             "Out for Repair",
             "Out of Service",
-            "Retired"
+            "Retired",
+            "Storage"
         ]
     );
     let role = |name: &str| {
@@ -255,6 +257,13 @@ async fn fresh_database_is_migrated_and_seeded() {
     );
     assert_eq!(role("Out for Repair"), Some(StatusRole::OutForRepair));
     assert_eq!(role("Retired"), Some(StatusRole::Retired));
+    assert_eq!(role("Storage"), Some(StatusRole::Storage));
+    let storage = statuses.iter().find(|s| s.name == "Storage").unwrap();
+    assert_eq!(
+        storage.tracks_due,
+        Some(false),
+        "stored items aren't tracked"
+    );
     assert_eq!(statuses[0].tracks_due, Some(true));
     assert_eq!(statuses[2].tracks_due, Some(false));
     assert_eq!(statuses[0].is_internal, None);
@@ -447,7 +456,7 @@ async fn unused_list_entries_can_be_deleted_but_used_ones_cannot() {
             .await
             .unwrap()
             .len(),
-        4
+        5
     );
 }
 
@@ -1187,6 +1196,229 @@ async fn last_cost_follows_provider_service_and_model() {
         .unwrap()
         .unwrap();
     assert_eq!((last.cost_cents, last.cal_date), (14_000, d(2026, 3, 1)));
+}
+
+#[tokio::test]
+async fn stored_items_pause_tracking_and_resume_on_their_schedule() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let storage = status_with_role(s, StatusRole::Storage).await;
+    let mut input = asset_input(s, "STORE-1", AssetKind::Instrument).await;
+    let active = input.status_id;
+    // Calibrated long enough ago that it fell due while it was stored.
+    input.last_cal_date = Some(d(2024, 1, 15));
+    let asset = s.create_asset(&ctx(), input.clone()).await.unwrap();
+    assert_eq!(asset.due_status, DueStatus::Overdue);
+    let due = asset.next_cal_date;
+
+    input.status_id = storage.id;
+    let stored = s
+        .update_asset(&ctx(), asset.id, asset.row_version, input.clone())
+        .await
+        .unwrap();
+    assert_eq!(stored.status_role, Some(StatusRole::Storage));
+    assert_eq!(stored.due_status, DueStatus::NotTracked);
+    assert_eq!(stored.next_cal_date, due, "the schedule is kept, not moved");
+    let today = Local::now().date_naive();
+    let summary =
+        polaris_core::schedule::DueSummary::from_assets(std::slice::from_ref(&stored), today);
+    assert!(
+        summary.attention.is_empty(),
+        "stored items don't need attention"
+    );
+
+    input.status_id = active;
+    let back = s
+        .update_asset(&ctx(), stored.id, stored.row_version, input)
+        .await
+        .unwrap();
+    assert_eq!(back.next_cal_date, due);
+    assert_eq!(
+        back.due_status,
+        DueStatus::Overdue,
+        "due straight away once back"
+    );
+}
+
+#[tokio::test]
+async fn aggregate_systems_follow_their_soonest_instrument() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let storage = status_with_role(s, StatusRole::Storage).await;
+
+    let mut input = asset_input(s, "SYS-A", AssetKind::System).await;
+    input.cal_aggregate = true;
+    input.last_cal_date = Some(d(2025, 1, 1));
+    let system = s.create_asset(&ctx(), input).await.unwrap();
+    assert!(system.cal_aggregate);
+    assert_eq!(
+        system.cal_interval, None,
+        "an aggregate System has no cycle of its own"
+    );
+    assert_eq!(system.next_cal_date, None, "no Instruments yet");
+
+    let mut ids = Vec::new();
+    for (tag, last) in [
+        ("A-1", d(2026, 1, 31)),
+        ("A-2", d(2026, 2, 15)),
+        ("A-3", d(2026, 5, 15)),
+    ] {
+        let mut i = asset_input(s, tag, AssetKind::Instrument).await;
+        i.last_cal_date = Some(last);
+        ids.push(s.create_asset(&ctx(), i).await.unwrap().id);
+    }
+    // An Instrument can't be made aggregate.
+    let mut i = asset_input(s, "A-X", AssetKind::Instrument).await;
+    i.cal_aggregate = true;
+    assert!(!s.create_asset(&ctx(), i).await.unwrap().cal_aggregate);
+
+    s.add_to_system(&ctx(), system.id, &ids).await.unwrap();
+    let system = s.get_asset(system.id).await.unwrap();
+    assert_eq!(system.child_count, 3);
+    assert_eq!(system.next_cal_date, Some(d(2027, 1, 31)));
+    let moved = s.get_asset(ids[0]).await.unwrap();
+    assert_eq!(moved.parent_tag.as_deref(), Some("SYS-A"));
+    let history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(ids[0]),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        history
+            .iter()
+            .any(|e| e.changes.iter().any(|c| c.field == "Part of System"))
+    );
+
+    // Calibrating the soonest one moves the System's date to the next one due.
+    s.create_calibration(&ctx(), cal(ids[0], vendor, d(2026, 11, 1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.get_asset(system.id).await.unwrap().next_cal_date,
+        Some(d(2027, 2, 15))
+    );
+
+    // Instruments that aren't tracked (stored) don't count.
+    let a2 = s.get_asset(ids[1]).await.unwrap();
+    let mut edit = asset_input(s, "A-2", AssetKind::Instrument).await;
+    edit.parent_id = Some(system.id);
+    edit.last_cal_date = Some(d(2026, 2, 15));
+    edit.status_id = storage.id;
+    s.update_asset(&ctx(), a2.id, a2.row_version, edit)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.get_asset(system.id).await.unwrap().next_cal_date,
+        Some(d(2027, 5, 15))
+    );
+
+    // The Dashboard counts the Instruments, not the aggregate System as well.
+    let all = s.list_assets(&AssetFilter::default()).await.unwrap();
+    let summary = polaris_core::schedule::DueSummary::from_assets(&all, d(2026, 11, 23));
+    assert!(summary.items.iter().all(|i| i.asset.asset_tag != "SYS-A"));
+
+    // Only Instruments can be added.
+    let other = s
+        .create_asset(&ctx(), asset_input(s, "SYS-B", AssetKind::System).await)
+        .await
+        .unwrap();
+    let err = s
+        .add_to_system(&ctx(), system.id, &[other.id])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Validation(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn instruments_take_their_systems_location_and_department() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let place = |name: &'static str| async move {
+        s.create_lookup(&ctx(), LookupKind::Location, lookup(name))
+            .await
+            .unwrap()
+            .id
+    };
+    let (lab, bench, store_room) = (
+        place("Lab").await,
+        place("Bench").await,
+        place("Store room").await,
+    );
+    let qa = s
+        .create_lookup(&ctx(), LookupKind::Department, lookup("QA"))
+        .await
+        .unwrap()
+        .id;
+
+    let mut sys = asset_input(s, "RIG-L", AssetKind::System).await;
+    sys.location_id = Some(lab);
+    sys.department_id = Some(qa);
+    let system = s.create_asset(&ctx(), sys.clone()).await.unwrap();
+
+    // Created inside the System: its location is the System's, whatever was entered.
+    let mut i = asset_input(s, "L-1", AssetKind::Instrument).await;
+    i.parent_id = Some(system.id);
+    i.location_id = Some(bench);
+    let inside = s.create_asset(&ctx(), i.clone()).await.unwrap();
+    assert_eq!(
+        (inside.location_id, inside.department_id),
+        (Some(lab), Some(qa))
+    );
+    // Editing it can't move it away from the System's location either.
+    let edited = s
+        .update_asset(&ctx(), inside.id, inside.row_version, i)
+        .await
+        .unwrap();
+    assert_eq!(edited.location_id, Some(lab));
+
+    // Added to the System later: the same.
+    let mut j = asset_input(s, "L-2", AssetKind::Instrument).await;
+    j.location_id = Some(bench);
+    let outside = s.create_asset(&ctx(), j).await.unwrap();
+    assert_eq!(outside.location_id, Some(bench));
+    s.add_to_system(&ctx(), system.id, &[outside.id])
+        .await
+        .unwrap();
+    assert_eq!(
+        s.get_asset(outside.id).await.unwrap().location_id,
+        Some(lab)
+    );
+
+    // The System moves: its Instruments move with it, and the change is in their history.
+    sys.location_id = Some(store_room);
+    sys.department_id = None;
+    let system = s
+        .update_asset(&ctx(), system.id, system.row_version, sys)
+        .await
+        .unwrap();
+    for id in [inside.id, outside.id] {
+        let a = s.get_asset(id).await.unwrap();
+        assert_eq!(
+            (a.location_id, a.department_id),
+            (Some(store_room), None),
+            "{}",
+            a.asset_tag
+        );
+    }
+    let history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(outside.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        history[0]
+            .changes
+            .iter()
+            .any(|c| c.field == "Location" && c.new.as_deref() == Some("Store room")),
+        "{:?}",
+        history[0].changes
+    );
+    assert_eq!(system.location_id, Some(store_room));
 }
 
 #[tokio::test]

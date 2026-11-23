@@ -152,7 +152,7 @@ export function LookupDialog({
                     label="Track due dates"
                     description={
                       item?.status_role
-                        ? "Built in: items away for calibration or repair are always tracked; retired items never are."
+                        ? "Built in: items away for calibration or repair are always tracked; retired and stored items never are."
                         : "Items in this status appear in overdue and due-soon tracking."
                     }
                     isSelected={!!input.tracks_due}

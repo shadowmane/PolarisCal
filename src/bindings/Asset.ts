@@ -34,4 +34,9 @@ next_cal_date: string | null,
 /**
  * A calibration extension sets `next_cal_date` (see [`crate::schedule::apply_extension`]).
  */
-calibration_extended: boolean, due_status: DueStatus, child_count: number, notes: string | null, is_archived: boolean, row_version: number, created_at: string, updated_at: string, };
+calibration_extended: boolean, 
+/**
+ * Systems only: the schedule comes from the System's Instruments. `next_cal_date` is
+ * then the soonest next calibration among its tracked, unarchived Instruments.
+ */
+cal_aggregate: boolean, due_status: DueStatus, child_count: number, notes: string | null, is_archived: boolean, row_version: number, created_at: string, updated_at: string, };

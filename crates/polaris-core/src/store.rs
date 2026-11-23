@@ -119,6 +119,16 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         input: AssetInput,
     ) -> Result<Asset>;
+    /// Moves Instruments into a System (e.g. when the System is created), each audited as
+    /// an edit of the Instrument. Archived items and Systems can't be added. Like any
+    /// Instrument in a System, they take the System's location and department (as they do
+    /// on every save, and whenever the System's change).
+    async fn add_to_system(
+        &self,
+        ctx: &WriteContext,
+        system_id: Id,
+        instrument_ids: &[Id],
+    ) -> Result<()>;
     async fn set_asset_archived(
         &self,
         ctx: &WriteContext,

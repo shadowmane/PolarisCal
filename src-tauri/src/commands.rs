@@ -579,6 +579,19 @@ pub async fn update_asset(
         .await?)
 }
 
+/// Moves Instruments into a System, e.g. the ones chosen when creating it.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn add_to_system(
+    state: State<'_, AppState>,
+    system_id: Id,
+    instrument_ids: Vec<Id>,
+) -> CmdResult<()> {
+    let (store, me) = require(&state, Need::Editor).await?;
+    Ok(store
+        .add_to_system(&ctx(&me, None), system_id, &instrument_ids)
+        .await?)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn set_asset_archived(
     state: State<'_, AppState>,

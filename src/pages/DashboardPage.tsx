@@ -184,7 +184,12 @@ function AttentionTable({
               <Table.Row id={a.id} className="cursor-pointer">
                 <Table.Cell className="font-medium">{a.asset_tag}</Table.Cell>
                 <Table.Cell>{a.description}</Table.Cell>
-                <Table.Cell>{a.location_name ?? EMPTY}</Table.Cell>
+                <Table.Cell>
+                  {a.location_name ?? EMPTY}
+                  {a.parent_tag && (
+                    <div className="text-xs text-muted">Part of System {a.parent_tag}</div>
+                  )}
+                </Table.Cell>
                 <Table.Cell>{formatDate(a.next_cal_date)}</Table.Cell>
                 <Table.Cell>
                   <DueChips asset={a} />

@@ -328,7 +328,10 @@ macro_rules! asset_select {
                 s.builtin_role AS status_role, a.previous_status_id,
                 a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit, a.cal_interval_end_of_month,
                 a.in_service_date, a.first_cal_date, a.last_cal_date, a.last_cal_date_entered, a.next_cal_date,
-                a.cal_extended,
+                a.cal_extended, a.cal_aggregate,
+                (SELECT MIN(c.next_cal_date) FROM assets c
+                   JOIN asset_statuses cs ON cs.id = c.status_id
+                  WHERE c.parent_id = a.id AND c.is_archived = FALSE AND cs.tracks_due = TRUE) AS children_next_cal_date,
                 (SELECT COUNT(*) FROM assets c WHERE c.parent_id = a.id AND c.is_archived = FALSE) AS child_count,
                 a.notes, a.is_archived, a.row_version, a.created_at, a.updated_at
          FROM assets a
@@ -348,7 +351,14 @@ fn role_from(row: &Row) -> Result<Option<StatusRole>> {
 }
 
 fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
-    let next_cal_date: Option<NaiveDate> = row.get("next_cal_date")?;
+    // An aggregate System is due when its soonest tracked Instrument is.
+    let cal_aggregate: bool = row.get("cal_aggregate")?;
+    let next_cal_date: Option<NaiveDate> = if cal_aggregate {
+        row.get("children_next_cal_date")?
+    } else {
+        row.get("next_cal_date")?
+    };
+    let cal_extended: bool = !cal_aggregate && row.get::<bool>("cal_extended")?;
     let tracks_due: bool = row.get("status_tracks_due")?;
     Ok(Asset {
         id: row.get("id")?,
@@ -378,13 +388,9 @@ fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
         last_cal_date: row.get("last_cal_date")?,
         last_cal_date_entered: row.get("last_cal_date_entered")?,
         next_cal_date,
-        calibration_extended: row.get("cal_extended")?,
-        due_status: due_status_with_extension(
-            next_cal_date,
-            tracks_due,
-            row.get("cal_extended")?,
-            today,
-        ),
+        calibration_extended: cal_extended,
+        cal_aggregate,
+        due_status: due_status_with_extension(next_cal_date, tracks_due, cal_extended, today),
         child_count: row.get("child_count")?,
         notes: row.get("notes")?,
         is_archived: row.get("is_archived")?,
@@ -392,6 +398,61 @@ fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
     })
+}
+
+/// An Instrument in a System is wherever the System is: it takes the System's location
+/// and department, whatever was entered.
+async fn inherit_from_system(conn: &mut Conn, input: &mut AssetInput) -> Result<()> {
+    if let Some(parent_id) = input.parent_id
+        && let Some(parent) = conn
+            .fetch_optional(
+                "SELECT location_id, department_id FROM assets WHERE id = ?1",
+                params![parent_id],
+            )
+            .await?
+    {
+        input.location_id = parent.get("location_id")?;
+        input.department_id = parent.get("department_id")?;
+    }
+    Ok(())
+}
+
+/// After a System's location or department changes, gives its Instruments the same,
+/// each audited as an edit of the Instrument.
+async fn cascade_to_instruments(conn: &mut Conn, ctx: &WriteContext, system: &Asset) -> Result<()> {
+    let children: Vec<Id> = conn
+        .fetch_all(
+            "SELECT id FROM assets WHERE parent_id = ?1 ORDER BY id",
+            params![system.id],
+        )
+        .await?
+        .iter()
+        .map(|r| r.get::<Id>("id"))
+        .collect::<Result<_>>()?;
+    for id in children {
+        let before = fetch_asset(conn, id).await?;
+        if before.location_id == system.location_id && before.department_id == system.department_id
+        {
+            continue;
+        }
+        conn.execute(
+            "UPDATE assets SET location_id = ?2, department_id = ?3, updated_at = ?4,
+                               row_version = row_version + 1
+             WHERE id = ?1",
+            params![id, system.location_id, system.department_id, now()],
+        )
+        .await?;
+        let after = fetch_asset(conn, id).await?;
+        write_audit(
+            conn,
+            NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Asset)
+                .subject(id, &after.asset_tag)
+                .asset(id)
+                .changes(diff(&asset_snapshot(&before), &asset_snapshot(&after))),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// Enforces the System/Instrument hierarchy rules that need the database.
@@ -1878,6 +1939,7 @@ impl Store for SqlStore {
         input.normalize()?;
         let mut tx = self.begin().await?;
         check_hierarchy(&mut tx, None, &input).await?;
+        inherit_from_system(&mut tx, &mut input).await?;
 
         let derived = derive_dates(
             input.first_cal_date,
@@ -1892,8 +1954,8 @@ impl Store for SqlStore {
                     location_id, department_id, owner_id, status_id, warranty_end_date,
                     cal_interval_value, cal_interval_unit, in_service_date,
                     first_cal_date, last_cal_date, next_cal_date, notes, created_at, updated_at,
-                    last_cal_date_entered, cal_interval_end_of_month)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, ?21, ?22)",
+                    last_cal_date_entered, cal_interval_end_of_month, cal_aggregate)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, ?21, ?22, ?23)",
                 params![
                     &input.asset_tag,
                     input.kind.as_str(),
@@ -1916,7 +1978,8 @@ impl Store for SqlStore {
                     &input.notes,
                     now(),
                     input.last_cal_date,
-                    input.cal_interval.is_some_and(|i| i.end_of_month)
+                    input.cal_interval.is_some_and(|i| i.end_of_month),
+                    input.cal_aggregate
                 ],
             )
             .await
@@ -1945,6 +2008,7 @@ impl Store for SqlStore {
         input.normalize()?;
         let mut tx = self.begin().await?;
         check_hierarchy(&mut tx, Some(id), &input).await?;
+        inherit_from_system(&mut tx, &mut input).await?;
         let before = fetch_asset(&mut tx, id).await?;
 
         let changed = tx
@@ -1955,7 +2019,7 @@ impl Store for SqlStore {
                     owner_id = ?12, status_id = ?13, warranty_end_date = ?14,
                     cal_interval_value = ?15, cal_interval_unit = ?16, in_service_date = ?17,
                     first_cal_date = ?18, last_cal_date_entered = ?19, notes = ?20, updated_at = ?21,
-                    cal_interval_end_of_month = ?22, row_version = row_version + 1
+                    cal_interval_end_of_month = ?22, cal_aggregate = ?23, row_version = row_version + 1
                  WHERE id = ?1 AND row_version = ?2",
                 params![
                     id,
@@ -1979,7 +2043,8 @@ impl Store for SqlStore {
                     input.last_cal_date,
                     &input.notes,
                     now(),
-                    input.cal_interval.is_some_and(|i| i.end_of_month)
+                    input.cal_interval.is_some_and(|i| i.end_of_month),
+                    input.cal_aggregate
                 ],
             )
             .await
@@ -2002,8 +2067,81 @@ impl Store for SqlStore {
                 .changes(diff(&asset_snapshot(&before), &asset_snapshot(&after))),
         )
         .await?;
+        if after.kind == AssetKind::System
+            && (after.location_id != before.location_id
+                || after.department_id != before.department_id)
+        {
+            cascade_to_instruments(&mut tx, ctx, &after).await?;
+        }
         tx.commit().await?;
         Ok(after)
+    }
+
+    async fn add_to_system(
+        &self,
+        ctx: &WriteContext,
+        system_id: Id,
+        instrument_ids: &[Id],
+    ) -> Result<()> {
+        let mut tx = self.begin().await?;
+        let system = fetch_asset(&mut tx, system_id).await?;
+        if system.kind != AssetKind::System {
+            return Err(Error::validation(
+                "parent_id",
+                "Instruments can only belong to a System.",
+            ));
+        }
+        if system.is_archived {
+            return Err(Error::validation(
+                "parent_id",
+                "The selected System is archived.",
+            ));
+        }
+        for &id in instrument_ids {
+            let before = fetch_asset(&mut tx, id).await?;
+            if before.parent_id == Some(system_id) {
+                continue;
+            }
+            if before.kind != AssetKind::Instrument {
+                return Err(Error::validation(
+                    "children",
+                    format!(
+                        "{} is a System; only Instruments can be added.",
+                        before.asset_tag
+                    ),
+                ));
+            }
+            if before.is_archived {
+                return Err(Error::validation(
+                    "children",
+                    format!("{} is archived. Restore it first.", before.asset_tag),
+                ));
+            }
+            tx.execute(
+                "UPDATE assets SET parent_id = ?2, location_id = ?3, department_id = ?4,
+                                   updated_at = ?5, row_version = row_version + 1
+                 WHERE id = ?1",
+                params![
+                    id,
+                    system_id,
+                    system.location_id,
+                    system.department_id,
+                    now()
+                ],
+            )
+            .await?;
+            let after = fetch_asset(&mut tx, id).await?;
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Asset)
+                    .subject(id, &after.asset_tag)
+                    .asset(id)
+                    .changes(diff(&asset_snapshot(&before), &asset_snapshot(&after))),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
     async fn set_asset_archived(

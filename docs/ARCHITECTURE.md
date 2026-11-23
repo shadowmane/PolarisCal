@@ -141,7 +141,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 12) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 15) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -230,12 +230,28 @@ the extension's date plus those days, and the last calibration stays as it was. 
 shortens the schedule, and the next calibration on or after its date ends it. While it lasts the
 item's status is **Calibration extended**; it is still counted and listed with the overdue items.
 
+### Aggregate Systems
+
+A System either has its own cycle or takes its schedule from its Instruments
+(`assets.cal_aggregate`). An aggregate System has no interval or calibration dates of its own;
+its next calibration is the soonest `next_cal_date` among its tracked, unarchived Instruments,
+worked out in the item query when read, so it follows every calibration, status change and
+move without being stored. The Dashboard leaves aggregate Systems out, since their Instruments
+are already counted. Instruments chosen when creating a System are moved into it in one
+transaction (`Store::add_to_system`), each audited as an edit.
+
+An Instrument in a System is wherever the System is: saving it, or moving it into a System,
+gives it the System's location and department, and changing a System's location or department
+passes the change to its Instruments in the same transaction (each audited as an edit).
+
 ### Failed calibrations and built-in statuses
 
-Three statuses are built in (a `builtin_role` column marks them, so they can be renamed but not
+Four statuses are built in (a `builtin_role` column marks them, so they can be renamed but not
 deleted): **Out for Calibration** and **Out for Repair** always track due dates, so an item away
 for service still shows when it's overdue or due soon (the Dashboard gives it a second badge with
-its status), and **Retired** never does. A calibration returned as **Fail** doesn't move the item's
+its status). **Retired** and **Storage** never do. Storage is for items out of active use but
+not retired: their next calibration date is left as it was, so an item put back into service is
+due on its original schedule, overdue straight away if that date passed while it was stored. A calibration returned as **Fail** doesn't move the item's
 last or next calibration date, since the item isn't fit for use. Saving one asks whether the item
 is being sent for repair or retired, and the record and the status change are saved together (the
 status change is audited as an edit of the item).

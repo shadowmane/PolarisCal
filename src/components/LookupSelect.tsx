@@ -22,6 +22,7 @@ export function LookupSelect({
   className,
   placeholder,
   isDisabled,
+  description,
 }: {
   kind: LookupKind;
   label: string;
@@ -33,6 +34,7 @@ export function LookupSelect({
   className?: string;
   placeholder?: string;
   isDisabled?: boolean;
+  description?: string;
 }) {
   const { can } = useAuth();
   // Technicians and administrators may add entries; only administrators edit or delete them.
@@ -53,6 +55,7 @@ export function LookupSelect({
         isRequired={isRequired}
         placeholder={placeholder}
         isDisabled={isDisabled}
+        description={description}
         className="min-w-0 flex-1"
       />
       {canAdd && !isDisabled && (

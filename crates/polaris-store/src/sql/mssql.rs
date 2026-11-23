@@ -312,6 +312,21 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "certificates",
         include_str!("../../migrations/mssql/0012_certificates.sql"),
     ),
+    (
+        13,
+        "storage status",
+        include_str!("../../migrations/mssql/0013_storage_status.sql"),
+    ),
+    (
+        14,
+        "aggregate systems",
+        include_str!("../../migrations/mssql/0014_aggregate_systems.sql"),
+    ),
+    (
+        15,
+        "system location",
+        include_str!("../../migrations/mssql/0015_system_location.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

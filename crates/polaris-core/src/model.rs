@@ -76,6 +76,8 @@ text_enum!(
         /// Where an item goes after failing calibration, unless it's retired.
         OutForRepair => "out_for_repair",
         Retired => "retired",
+        /// Out of active use but not retired: not tracked while stored.
+        Storage => "storage",
     }
 );
 
@@ -251,6 +253,9 @@ pub struct Asset {
     pub next_cal_date: Option<NaiveDate>,
     /// A calibration extension sets `next_cal_date` (see [`crate::schedule::apply_extension`]).
     pub calibration_extended: bool,
+    /// Systems only: the schedule comes from the System's Instruments. `next_cal_date` is
+    /// then the soonest next calibration among its tracked, unarchived Instruments.
+    pub cal_aggregate: bool,
     pub due_status: DueStatus,
     pub child_count: i64,
     pub notes: Option<String>,
@@ -285,6 +290,10 @@ pub struct AssetInput {
     /// the latest record's date wins, but this value is kept.
     pub last_cal_date: Option<NaiveDate>,
     pub notes: Option<String>,
+    /// Systems only: take the schedule from the System's Instruments (no interval or
+    /// calibration dates of its own).
+    #[serde(default)]
+    pub cal_aggregate: bool,
 }
 
 impl AssetInput {
@@ -301,6 +310,16 @@ impl AssetInput {
             &mut self.notes,
         ] {
             clean(field);
+        }
+
+        // Only Systems can aggregate, and an aggregate System has no schedule of its own.
+        if self.kind != AssetKind::System {
+            self.cal_aggregate = false;
+        }
+        if self.cal_aggregate {
+            self.cal_interval = None;
+            self.first_cal_date = None;
+            self.last_cal_date = None;
         }
 
         // No warranty date given: assume the standard one year from going into service.
@@ -751,6 +770,7 @@ mod tests {
             first_cal_date: None,
             last_cal_date: None,
             notes: None,
+            cal_aggregate: false,
         }
     }
 

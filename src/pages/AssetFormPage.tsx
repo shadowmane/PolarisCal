@@ -1,5 +1,5 @@
-import { Alert, Button, Form, Label, toast, ToggleButton, ToggleButtonGroup } from "@heroui/react";
-import { Boxes, Gauge } from "lucide-react";
+import { Alert, Button, ComboBox, Form, Input, Label, ListBox, toast, ToggleButton, ToggleButtonGroup } from "@heroui/react";
+import { Boxes, Gauge, Layers, Repeat, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import type { AssetKind } from "../bindings/AssetKind";
@@ -17,7 +17,7 @@ import {
   TextInput,
 } from "../components/fields";
 import { ApiError, api } from "../lib/api";
-import { formatDate } from "../lib/format";
+import { EMPTY, formatDate } from "../lib/format";
 import {
   type AssetForm,
   assetToForm,
@@ -48,6 +48,13 @@ export function AssetFormPage() {
 
   const lookups = useLookups();
   const systems = useAsync(() => api.listAssets({ kind: "system" }), []);
+  // A new System can be given its Instruments straight away.
+  const instruments = useAsync(
+    () => (editing ? Promise.resolve([]) : api.listAssets({ kind: "instrument" })),
+    [editing],
+  );
+  const [members, setMembers] = useState<number[]>([]);
+  const [memberSearch, setMemberSearch] = useState("");
   const existing = useAsync(() => (editing ? api.getAsset(assetId) : Promise.resolve(null)), [assetId]);
   const source = useAsync(() => (cloneId ? api.getAsset(cloneId) : Promise.resolve(null)), [cloneId]);
   const records = useAsync(
@@ -152,7 +159,18 @@ export function AssetFormPage() {
       const saved = editing
         ? await api.updateAsset(assetId, original!.row_version, converted.value, reason)
         : await api.createAsset(converted.value);
-      toast.success(editing ? `Saved ${saved.asset_tag}` : `Created ${saved.asset_tag}`);
+      let added = "";
+      if (!editing && saved.kind === "system" && members.length > 0) {
+        try {
+          await api.addToSystem(saved.id, members);
+          added = ` with ${members.length} Instrument${members.length === 1 ? "" : "s"}`;
+        } catch (e) {
+          toast.warning(
+            `${saved.asset_tag} was created, but its Instruments weren't added: ${e instanceof ApiError ? e.message : String(e)}`,
+          );
+        }
+      }
+      toast.success(editing ? `Saved ${saved.asset_tag}` : `Created ${saved.asset_tag}${added}`);
       navigate(`/assets/${saved.id}`, { replace: true });
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError("database", String(e));
@@ -174,6 +192,18 @@ export function AssetFormPage() {
     .map((s) => ({ id: s.id, label: s.asset_tag, description: s.description }));
 
   const kindLabel = form.kind === "system" ? "System" : "Instrument";
+  const aggregate = form.kind === "system" && form.cal_aggregate;
+  // An Instrument in a System is wherever the System is (the server enforces this too).
+  const parentSystem =
+    form.kind === "instrument" ? systems.data?.find((s) => s.id === form.parent_id) : undefined;
+  const childCount = original?.child_count ?? 0;
+  const fromSystem = parentSystem
+    ? `Set by System ${parentSystem.asset_tag}.`
+    : form.kind === "system" && (childCount > 0 || members.length > 0)
+      ? "Its Instruments are given the same."
+      : undefined;
+  const chosen = (instruments.data ?? []).filter((a) => members.includes(a.id));
+  const choosable = (instruments.data ?? []).filter((a) => !a.is_archived && !members.includes(a.id));
 
   return (
     <Form
@@ -265,7 +295,14 @@ export function AssetFormPage() {
             <SelectInput
               label="Part of System"
               value={form.parent_id}
-              onChange={(v) => set("parent_id", v)}
+              onChange={(v) => {
+                set("parent_id", v);
+                const system = systems.data?.find((s) => s.id === v);
+                if (system) {
+                  set("location_id", system.location_id);
+                  set("department_id", system.department_id);
+                }
+              }}
               options={systemOptions}
               error={errors.parent_id}
               placeholder="Standalone"
@@ -316,18 +353,22 @@ export function AssetFormPage() {
           <LookupSelect
             kind="location"
             label="Location"
-            value={form.location_id}
+            value={parentSystem ? parentSystem.location_id : form.location_id}
             onChange={(v) => set("location_id", v)}
             lookups={lookups}
             error={errors.location_id}
+            isDisabled={!!parentSystem}
+            description={fromSystem}
           />
           <LookupSelect
             kind="department"
             label="Department"
-            value={form.department_id}
+            value={parentSystem ? parentSystem.department_id : form.department_id}
             onChange={(v) => set("department_id", v)}
             lookups={lookups}
             error={errors.department_id}
+            isDisabled={!!parentSystem}
+            description={fromSystem}
           />
           <LookupSelect
             kind="owner"
@@ -341,8 +382,43 @@ export function AssetFormPage() {
 
         <FormSection
           title="Calibration schedule"
-          description="The next calibration date is calculated from the last calibration date plus the interval."
+          description={
+            aggregate
+              ? "This System is due whenever the soonest of its Instruments is due."
+              : "The next calibration date is calculated from the last calibration date plus the interval."
+          }
         >
+          {form.kind === "system" && (
+            <div className="flex flex-col gap-2 md:col-span-2">
+              <Label>Schedule</Label>
+              <ToggleButtonGroup
+                aria-label="Schedule"
+                selectionMode="single"
+                disallowEmptySelection
+                selectedKeys={[aggregate ? "aggregate" : "own"]}
+                onSelectionChange={(keys) => {
+                  const [k] = [...keys];
+                  if (k) set("cal_aggregate", k === "aggregate");
+                }}
+                className="self-start"
+              >
+                <ToggleButton id="own">
+                  <Repeat className="size-4" /> Its own cycle
+                </ToggleButton>
+                <ToggleButton id="aggregate">
+                  <Layers className="size-4" /> From its Instruments
+                </ToggleButton>
+              </ToggleButtonGroup>
+              {aggregate && (
+                <p className="text-xs text-muted">
+                  No calibration of its own: the next calibration shown is the soonest among its Instruments.
+                  Instruments that are retired, in storage, or archived don't count.
+                </p>
+              )}
+            </div>
+          )}
+          {!aggregate && (
+            <>
           {/* Interval, unit and End of month share a full-width line (too wide for one column);
               the hint or error goes under all three. */}
           <div className="flex flex-col gap-1 md:col-span-2">
@@ -388,13 +464,15 @@ export function AssetFormPage() {
             error={errors.first_cal_date}
             description="Filled in automatically from the earliest known calibration if left empty."
           />
+            </>
+          )}
           <DateInput
             label="Date put into service"
             value={form.in_service_date}
             onChange={(v) => set("in_service_date", v)}
             error={errors.in_service_date}
           />
-          {hasRecords ? (
+          {aggregate ? null : hasRecords ? (
             <DateInput
               label="Last calibration"
               value={original?.last_cal_date ?? null}
@@ -425,6 +503,75 @@ export function AssetFormPage() {
             </div>
           )}
         </FormSection>
+
+        {!editing && form.kind === "system" && (
+          <FormSection
+            title="Instruments"
+            description="Optional. Choose the Instruments that are part of this System; you can also add them later."
+          >
+            <div className="flex flex-col gap-3 md:col-span-2">
+              {chosen.length > 0 && (
+                <ul className="flex flex-col divide-y divide-separator rounded-xl border border-separator">
+                  {chosen.map((a) => (
+                    <li key={a.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                      <Gauge className="size-4 shrink-0 text-muted" />
+                      <div className="min-w-0 flex-1">
+                        <span className="font-medium">{a.asset_tag}</span>
+                        <span className="text-muted"> · {a.description}</span>
+                        {a.parent_tag && <div className="text-xs text-warning">Moves out of {a.parent_tag}</div>}
+                      </div>
+                      <span className="text-xs text-muted">Next due {formatDate(a.next_cal_date)}</span>
+                      <Button
+                        isIconOnly
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Remove ${a.asset_tag}`}
+                        onPress={() => setMembers((m) => m.filter((id) => id !== a.id))}
+                      >
+                        <X className="size-4" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <ComboBox
+                variant="secondary"
+                inputValue={memberSearch}
+                onInputChange={setMemberSearch}
+                selectedKey={null}
+                onSelectionChange={(k) => {
+                  if (k == null) return;
+                  setMembers((m) => [...m, Number(k)]);
+                  setMemberSearch("");
+                }}
+                menuTrigger="focus"
+              >
+                <Label>Add an Instrument</Label>
+                <ComboBox.InputGroup>
+                  <Input placeholder={instruments.loading ? "Loading…" : "Type an asset tag or description"} />
+                  <ComboBox.Trigger />
+                </ComboBox.InputGroup>
+                <ComboBox.Popover>
+                  <ListBox>
+                    {choosable.map((a) => (
+                      <ListBox.Item key={a.id} id={a.id} textValue={`${a.asset_tag} ${a.description}`}>
+                        <div className="flex flex-col">
+                          <span className="font-medium">{a.asset_tag}</span>
+                          <span className="text-xs text-muted">
+                            {a.description}
+                            {a.parent_tag ? ` · in ${a.parent_tag}` : ""}
+                            {" · "}Next due {a.next_cal_date ? formatDate(a.next_cal_date) : EMPTY}
+                          </span>
+                        </div>
+                        <ListBox.ItemIndicator />
+                      </ListBox.Item>
+                    ))}
+                  </ListBox>
+                </ComboBox.Popover>
+              </ComboBox>
+            </div>
+          </FormSection>
+        )}
 
         <FormSection title="Notes">
           <TextAreaInput

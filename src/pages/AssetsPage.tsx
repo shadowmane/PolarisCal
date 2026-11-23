@@ -7,7 +7,7 @@ import type { AssetKind } from "../bindings/AssetKind";
 import { ToggleSwitch } from "../components/fields";
 import { EmptyNote, ErrorAlert, Loading, PageHeader, StatusChip } from "../components/common";
 import { api } from "../lib/api";
-import { dueStatusMeta, EMPTY, formatDate, formatInterval } from "../lib/format";
+import { dueStatusMeta, EMPTY, formatDate, formatSchedule } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
 
 type KindTab = "all" | AssetKind;
@@ -138,11 +138,19 @@ export function AssetsPage() {
                     <Table.Cell>{a.location_name ?? EMPTY}</Table.Cell>
                     <Table.Cell>{a.department_name ?? EMPTY}</Table.Cell>
                     <Table.Cell>
-                      <span className={a.status_role === "retired" ? "font-medium text-danger" : undefined}>
+                      <span
+                        className={
+                          a.status_role === "retired"
+                            ? "font-medium text-danger"
+                            : a.status_role === "storage"
+                              ? "font-medium text-warning"
+                              : undefined
+                        }
+                      >
                         {a.status_name}
                       </span>
                     </Table.Cell>
-                    <Table.Cell>{formatInterval(a.cal_interval)}</Table.Cell>
+                    <Table.Cell>{formatSchedule(a)}</Table.Cell>
                     <Table.Cell>{formatDate(a.last_cal_date)}</Table.Cell>
                     <Table.Cell>
                       {/* Retired items aren't calibrated any more, so they have nothing due. */}

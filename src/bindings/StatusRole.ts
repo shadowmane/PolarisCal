@@ -3,4 +3,4 @@
 /**
  * Marks a built-in status the app relies on, so it keeps working if renamed.
  */
-export type StatusRole = "out_for_calibration" | "out_for_repair" | "retired";
+export type StatusRole = "out_for_calibration" | "out_for_repair" | "retired" | "storage";

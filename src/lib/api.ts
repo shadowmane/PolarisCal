@@ -128,6 +128,8 @@ export const api = {
   createAsset: (input: AssetInput) => call<Asset>("create_asset", { input }),
   updateAsset: (id: number, expectedVersion: number, input: AssetInput, reason: string) =>
     call<Asset>("update_asset", { id, expected_version: expectedVersion, input, reason }),
+  addToSystem: (systemId: number, instrumentIds: number[]) =>
+    call<void>("add_to_system", { system_id: systemId, instrument_ids: instrumentIds }),
   setAssetArchived: (id: number, expectedVersion: number, archived: boolean, reason: string) =>
     call<Asset>("set_asset_archived", { id, expected_version: expectedVersion, archived, reason }),
 

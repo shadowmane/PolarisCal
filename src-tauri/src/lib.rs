@@ -55,6 +55,7 @@ pub fn run() {
             commands::get_asset,
             commands::create_asset,
             commands::update_asset,
+            commands::add_to_system,
             commands::set_asset_archived,
             commands::list_calibrations,
             commands::get_calibration,

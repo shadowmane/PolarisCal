@@ -194,7 +194,14 @@ pub fn asset_snapshot(a: &Asset) -> Snapshot {
         ("Owner", a.owner_name.clone()),
         ("Status", Some(a.status_name.clone())),
         ("Warranty ends", opt(&a.warranty_end_date)),
-        ("Calibration interval", interval(&a.cal_interval)),
+        (
+            "Calibration interval",
+            if a.cal_aggregate {
+                Some("From its Instruments".to_string())
+            } else {
+                interval(&a.cal_interval)
+            },
+        ),
         ("Put into service", opt(&a.in_service_date)),
         ("First calibration", opt(&a.first_cal_date)),
         ("Last calibration", opt(&a.last_cal_date)),
