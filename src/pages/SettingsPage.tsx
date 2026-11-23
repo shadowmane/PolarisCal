@@ -205,7 +205,7 @@ function CurrencyCard({ settings, onSaved }: { settings?: AppSettings; onSaved: 
   return (
     <Card>
       <Card.Header>
-        <Card.Title>Currency</Card.Title>
+        <LockableTitle locked={!isAdmin}>Currency</LockableTitle>
         <Card.Description>
           The symbol shown with costs on service records, in reports, and in Excel exports. It doesn't convert
           amounts. Applies to everyone.
@@ -269,7 +269,7 @@ function DateFormatCard({ settings, onSaved }: { settings?: AppSettings; onSaved
   return (
     <Card>
       <Card.Header>
-        <Card.Title>Date format</Card.Title>
+        <LockableTitle locked={!isAdmin}>Date format</LockableTitle>
         <Card.Description>
           How dates appear in tables, on screens, in printed reports and labels, and in Excel exports. Date boxes
           take the day, month, and year in the same order. Applies to everyone.
