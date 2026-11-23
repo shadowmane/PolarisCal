@@ -1758,10 +1758,19 @@ async fn password_reset_requests_wait_for_a_new_password() {
     let requested = s.get_user(tech.id).await.unwrap().reset_requested_at;
     assert!(requested.is_some());
     s.request_password_reset("jkim").await.unwrap();
-    assert_eq!(s.get_user(tech.id).await.unwrap().reset_requested_at, requested);
+    assert_eq!(
+        s.get_user(tech.id).await.unwrap().reset_requested_at,
+        requested
+    );
     s.request_password_reset("nobody").await.unwrap();
     s.request_password_reset("gone").await.unwrap();
-    assert!(s.get_user(gone.id).await.unwrap().reset_requested_at.is_none());
+    assert!(
+        s.get_user(gone.id)
+            .await
+            .unwrap()
+            .reset_requested_at
+            .is_none()
+    );
 
     let requests: Vec<_> = s
         .list_audit(&AuditFilter {
