@@ -27,6 +27,7 @@ import type { CommandError } from "../bindings/CommandError";
 import type { ConnectionCheck } from "../bindings/ConnectionCheck";
 import type { ConnectionChoice } from "../bindings/ConnectionChoice";
 import type { ConnectionSettings } from "../bindings/ConnectionSettings";
+import type { ConnectionStatus } from "../bindings/ConnectionStatus";
 import type { CopyReport } from "../bindings/CopyReport";
 import type { DatabaseConfig } from "../bindings/DatabaseConfig";
 import type { DueSummary } from "../bindings/DueSummary";
@@ -80,7 +81,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 /** Commands whose auth errors are expected answers, not a sign the session changed. */
-const SESSION_COMMANDS = new Set(["sign_in", "unlock_session", "setup_admin"]);
+const SESSION_COMMANDS = new Set(["sign_in", "unlock_session", "setup_admin", "unlock_connection_settings"]);
 
 export const api = {
   appInfo: () => call<AppInfo>("app_info"),
@@ -192,6 +193,13 @@ export const api = {
 
   // Database connection (this computer) and copying data between databases
   getConnectionSettings: () => call<ConnectionSettings>("get_connection_settings"),
+  /** Green, yellow, or red, with what's connected. Works without signing in. */
+  connectionStatus: () => call<ConnectionStatus>("connection_status"),
+  /** Tries the configured database again if it couldn't be opened. */
+  retryConnection: () => call<ConnectionStatus>("retry_connection"),
+  /** An administrator of the current database unlocks the connection settings for a while. */
+  unlockConnectionSettings: (username: string, password: string) =>
+    call<void>("unlock_connection_settings", { username, password }),
   readSharedSettings: (path: string) => call<SharedFilePreview>("read_shared_settings", { path }),
   testConnection: (choice: ConnectionChoice) => call<ConnectionCheck>("test_connection", { choice }),
   saveConnection: (choice: ConnectionChoice) => call<ConnectionSettings>("save_connection", { choice }),

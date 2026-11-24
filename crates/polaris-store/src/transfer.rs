@@ -105,6 +105,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("updated_at", Time),
             ("signature", Text),
             ("reset_requested_at", Time),
+            ("password_changed_at", Time),
         ],
     },
     TableSpec {

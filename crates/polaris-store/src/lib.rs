@@ -100,6 +100,16 @@ impl DatabaseConfig {
         }
     }
 
+    /// The same name [`StoreInfo::backend`](polaris_core::model::StoreInfo) uses.
+    pub fn backend_name(&self) -> &'static str {
+        match self {
+            DatabaseConfig::Sqlite { .. } => "sqlite",
+            DatabaseConfig::Postgres(_) => "postgres",
+            DatabaseConfig::Mysql(_) => "mysql",
+            DatabaseConfig::SqlServer(_) => "mssql",
+        }
+    }
+
     pub fn server(&self) -> Option<&ServerConfig> {
         match self {
             DatabaseConfig::Sqlite { .. } => None,

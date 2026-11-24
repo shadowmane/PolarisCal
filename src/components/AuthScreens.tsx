@@ -8,10 +8,10 @@ import { type ReactNode, useEffect, useState } from "react";
 import type { User } from "../bindings/User";
 import { ApiError, api } from "../lib/api";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
+import { checkPassword, describePasswordRules, isPasswordExpired } from "../lib/password";
+import { ConnectionButton } from "./ConnectionStatus";
 import { ConnectionDialog } from "./DatabaseForms";
 import { TextInput } from "./fields";
-
-const MIN_PASSWORD = 10;
 
 function Brand() {
   const [version, setVersion] = useState<string>();
@@ -31,9 +31,25 @@ function Brand() {
   );
 }
 
-function AuthLayout({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+function AuthLayout({
+  title,
+  description,
+  children,
+  onConnectionChanged,
+}: {
+  title: string;
+  description?: ReactNode;
+  children: ReactNode;
+  /** Before sign-in: show the connection in the corner, and what to do when it changes. */
+  onConnectionChanged?: () => void;
+}) {
   return (
-    <div className="grid h-full place-items-center overflow-y-auto bg-background p-6">
+    <div className="relative grid h-full place-items-center overflow-y-auto bg-background p-6">
+      {onConnectionChanged && (
+        <div className="absolute top-3 left-3">
+          <ConnectionButton onChanged={onConnectionChanged} />
+        </div>
+      )}
       <div className="w-full max-w-sm">
         <Brand />
         <div className="rounded-2xl bg-surface p-6 shadow-surface">
@@ -90,9 +106,10 @@ function useSubmit() {
   return { busy, errors, setErrors, message, setMessage, run, field };
 }
 
-function checkNewPassword(password: string, confirm: string): FieldErrors {
+function checkNewPassword(password: string, confirm: string, username = ""): FieldErrors {
   const errors: FieldErrors = {};
-  if (password.length < MIN_PASSWORD) errors.password = `Use at least ${MIN_PASSWORD} characters.`;
+  const problem = checkPassword(password, username);
+  if (problem) errors.password = problem;
   if (confirm !== password) errors.confirm = "The passwords don't match.";
   return errors;
 }
@@ -107,14 +124,30 @@ export function SplashScreen() {
 
 export function ConnectionErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
   const [changing, setChanging] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  async function retry() {
+    setRetrying(true);
+    try {
+      await api.retryConnection();
+    } catch {
+      // The screen shows whatever is still wrong.
+    } finally {
+      setRetrying(false);
+      onRetry();
+    }
+  }
   return (
-    <AuthLayout title="Can't open the database" description="PolarisCal couldn't connect to its database.">
+    <AuthLayout
+      title="Can't open the database"
+      description="PolarisCal couldn't connect to its database."
+      onConnectionChanged={onRetry}
+    >
       <ErrorBanner message={message} />
       <p className="mb-4 text-sm text-muted">
         Check that the database file or server is reachable, then try again, or choose a different connection.
       </p>
       <div className="flex flex-col gap-2">
-        <Button fullWidth onPress={onRetry}>
+        <Button fullWidth isPending={retrying} onPress={() => void retry()}>
           Try again
         </Button>
         <Button fullWidth variant="secondary" onPress={() => setChanging(true)}>
@@ -136,7 +169,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   const [changing, setChanging] = useState(false);
 
   function submit() {
-    const local = checkNewPassword(password, confirm);
+    const local = checkNewPassword(password, confirm, username);
     if (!username.trim()) local.username = "Choose a username.";
     if (!displayName.trim()) local.display_name = "Enter your name.";
     if (Object.keys(local).length) return setErrors(local);
@@ -155,6 +188,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
 
   return (
     <AuthLayout
+      onConnectionChanged={onDone}
       title="Set up PolarisCal"
       description="This database has no accounts yet. Create the first administrator; you can add everyone else afterwards."
     >
@@ -178,7 +212,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           error={errors.password}
           isRequired
           autoComplete="new-password"
-          description={`At least ${MIN_PASSWORD} characters.`}
+          description={describePasswordRules()}
         />
         <TextInput
           label="Confirm password"
@@ -232,7 +266,7 @@ export function SignInScreen({ onDone }: { onDone: () => void }) {
   }
 
   return (
-    <AuthLayout title="Sign in">
+    <AuthLayout title="Sign in" onConnectionChanged={onDone}>
       <ErrorBanner message={message} />
       <Form
         validationBehavior="aria"
@@ -283,7 +317,16 @@ export function SignInScreen({ onDone }: { onDone: () => void }) {
 }
 
 /** Password change form, used full-screen (forced) and inside a dialog. */
-export function ChangePasswordForm({ onDone, submitLabel = "Change password" }: { onDone: () => void; submitLabel?: string }) {
+export function ChangePasswordForm({
+  onDone,
+  username,
+  submitLabel = "Change password",
+}: {
+  onDone: () => void;
+  /** Whose password it is, so it can't be set to the username. */
+  username: string;
+  submitLabel?: string;
+}) {
   const [current, setCurrent] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -297,7 +340,7 @@ export function ChangePasswordForm({ onDone, submitLabel = "Change password" }: 
         className="flex flex-col gap-4"
         onSubmit={(e) => {
           e.preventDefault();
-          const local = checkNewPassword(password, confirm);
+          const local = checkNewPassword(password, confirm, username);
           if (!current) local.current_password = "Enter your current password.";
           if (Object.keys(local).length) return setErrors(local);
           void run(async () => {
@@ -322,7 +365,7 @@ export function ChangePasswordForm({ onDone, submitLabel = "Change password" }: 
           onChange={field("password", setPassword)}
           error={errors.password}
           autoComplete="new-password"
-          description={`At least ${MIN_PASSWORD} characters.`}
+          description={describePasswordRules()}
         />
         <TextInput
           label="Confirm new password"
@@ -352,9 +395,13 @@ export function ChangePasswordScreen({
   return (
     <AuthLayout
       title="Choose a new password"
-      description={`Welcome, ${user.display_name}. An administrator set a temporary password for your account; choose your own to continue.`}
+      description={
+        isPasswordExpired(user)
+          ? `Welcome back, ${user.display_name}. Your password has expired; choose a new one to continue.`
+          : `Welcome, ${user.display_name}. An administrator set a temporary password for your account; choose your own to continue.`
+      }
     >
-      <ChangePasswordForm onDone={onDone} submitLabel="Save and continue" />
+      <ChangePasswordForm onDone={onDone} username={user.username} submitLabel="Save and continue" />
       <Button variant="ghost" fullWidth className="mt-2" onPress={onSignOut}>
         Sign out
       </Button>

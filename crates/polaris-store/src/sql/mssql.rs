@@ -332,6 +332,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "password reset requests",
         include_str!("../../migrations/mssql/0016_password_reset_requests.sql"),
     ),
+    (
+        17,
+        "password expiry",
+        include_str!("../../migrations/mssql/0017_password_expiry.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

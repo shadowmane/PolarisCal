@@ -14,6 +14,7 @@ import {
 } from "../components/AuthScreens";
 import { UpdateNotice } from "../components/UpdateNotice";
 import { ApiError, AUTH_CHANGED_EVENT, api } from "./api";
+import { setPasswordPolicy } from "./password";
 import { can as roleCan, type Permission } from "./permissions";
 
 interface AuthContextValue {
@@ -77,7 +78,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await api.authStatus());
+      const next = await api.authStatus();
+      setPasswordPolicy(next.password_policy);
+      setStatus(next);
       setError(undefined);
     } catch (e) {
       setError(e instanceof ApiError ? e : new ApiError("database", String(e)));

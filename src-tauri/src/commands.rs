@@ -9,9 +9,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use chrono::Local;
+use chrono::{Local, Utc};
 use polaris_core::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
-use polaris_core::auth::{NewUser, User, UserUpdate, hash_password, verify_password};
+use polaris_core::auth::{
+    NewUser, PasswordPolicy, User, UserUpdate, hash_password, verify_password,
+};
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentCategory, AttachmentFilter,
     CalibrationFilter, CalibrationInput, CalibrationRecord, LastCost, LookupInput, LookupItem,
@@ -208,7 +210,7 @@ fn start_session(state: &AppState, user: &User) {
 
 /// A real Argon2 hash to verify against when the username doesn't exist, so a
 /// failed sign-in takes the same time whether or not the account exists.
-fn dummy_hash() -> &'static str {
+pub(crate) fn dummy_hash() -> &'static str {
     static HASH: OnceLock<String> = OnceLock::new();
     HASH.get_or_init(|| hash_password("polariscal-timing-equalizer").unwrap_or_default())
 }
@@ -265,6 +267,8 @@ pub struct AuthStatus {
     /// Whether to look for a new version at startup (an admin setting). Known before
     /// sign-in so the update notice can appear on the sign-in screen.
     pub update_checks: bool,
+    /// The rules for new passwords, for the setup and password-change screens.
+    pub password_policy: PasswordPolicy,
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -283,15 +287,12 @@ pub async fn auth_status(state: State<'_, AppState>) -> CmdResult<AuthStatus> {
                 locked: false,
                 idle_lock_minutes,
                 update_checks: true,
+                password_policy: PasswordPolicy::default(),
             });
         }
     };
     let setup_required = store.user_count().await? == 0;
-    let update_checks = store
-        .settings()
-        .await
-        .map(|s| s.update_checks)
-        .unwrap_or(true);
+    let settings = store.settings().await.unwrap_or_default();
     let timeout = state.idle_timeout();
     let (user, locked) = state.with_session(|slot| match slot {
         Some(session) => {
@@ -309,7 +310,8 @@ pub async fn auth_status(state: State<'_, AppState>) -> CmdResult<AuthStatus> {
         user,
         locked,
         idle_lock_minutes,
-        update_checks,
+        update_checks: settings.update_checks,
+        password_policy: settings.password_policy,
     })
 }
 
@@ -345,8 +347,13 @@ pub async fn sign_in(
             BAD_CREDENTIALS,
         ));
     }
-    let user = creds.expect("accepted implies an account").user;
+    let mut user = creds.expect("accepted implies an account").user;
     store.record_sign_in(&username, Some(&user)).await?;
+    // An expired password still signs in, but straight to choosing a new one.
+    let policy = store.settings().await?.password_policy;
+    if policy.is_expired(user.password_changed_at, Utc::now()) {
+        user = store.expire_password(&user).await?;
+    }
     start_session(&state, &user);
     Ok(user)
 }

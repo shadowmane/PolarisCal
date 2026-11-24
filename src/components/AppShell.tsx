@@ -32,6 +32,7 @@ import { setNoticeDismissed, useAvailableUpdate, useNoticeDismissed } from "../l
 import { useAsync } from "../lib/useAsync";
 import { AboutDialog } from "./AboutDialog";
 import { ChangePasswordForm } from "./AuthScreens";
+import { ConnectionDetails, ConnectionLight, connectionLabel, useConnectionStatus } from "./ConnectionStatus";
 
 interface NavItem {
   to: string;
@@ -102,6 +103,7 @@ function UserPanel() {
               <Modal.Body>
                 <div className="p-1">
                   <ChangePasswordForm
+                    username={user.username}
                     onDone={() => {
                       setChanging(false);
                       toast.success("Password changed");
@@ -157,34 +159,23 @@ function NavSection({ title, items }: { title?: string; items: NavItem[] }) {
   );
 }
 
-function ConnectionStatus() {
-  const { data, error } = useAsync(() => api.appInfo(), []);
-  const connected = !!data?.store;
-  const problem = data?.connection_error ?? error?.message;
-  const label = connected
-    ? `${data!.store!.backend === "sqlite" ? "SQLite" : data!.store!.backend} · schema v${data!.store!.schema_version}`
-    : data || error
-      ? "Not connected"
-      : "Connecting…";
-
+/** The database connection, with the same light as the sign-in screens. */
+function SidebarConnection() {
+  const { status, error } = useConnectionStatus();
   return (
     <Tooltip delay={300}>
       <Tooltip.Trigger>
         <NavLink
-          to="/settings"
+          to="/settings?tab=administration"
           className="flex min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-xs text-muted hover:bg-default"
         >
-          <span
-            className={`size-2 shrink-0 rounded-full ${connected ? "bg-success" : problem ? "bg-danger" : "bg-warning"}`}
-          />
+          <ConnectionLight status={status} error={error} />
           <Database className="size-3.5 shrink-0" />
-          <span className="truncate">{label}</span>
+          <span className="truncate">{connectionLabel(status, error)}</span>
         </NavLink>
       </Tooltip.Trigger>
       <Tooltip.Content placement="right">
-        <p className="max-w-80 text-xs break-all">
-          {connected ? data!.store!.location : (problem ?? "Opening the database…")}
-        </p>
+        <ConnectionDetails status={status} error={error} />
       </Tooltip.Content>
     </Tooltip>
   );
@@ -252,7 +243,7 @@ export function AppShell() {
         {/* Where the data lives and the theme, at a glance. */}
         <div className="mb-3 flex items-center gap-1 border-b border-separator pb-3">
           <div className="min-w-0 flex-1">
-            <ConnectionStatus />
+            <SidebarConnection />
           </div>
           <Tooltip delay={300}>
             <Button

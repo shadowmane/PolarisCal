@@ -2,6 +2,7 @@ import { Button, Card, Tabs, toast, ToggleButton, ToggleButtonGroup } from "@her
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowDownCircle, ArrowRightLeft, Database, FolderOpen, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import type { AppSettings } from "../bindings/AppSettings";
+import type { PasswordPolicy } from "../bindings/PasswordPolicy";
 import { type ReactNode, useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import { ErrorAlert, Loading, LockableTitle, PageHeader } from "../components/common";
@@ -16,6 +17,7 @@ import { DATE_FORMATS, type DateFormatId, formatYmd, setDateFormat } from "../li
 import { checkForUpdate, describeCheckError, installUpdate, useAvailableUpdate } from "../lib/updates";
 import { useAuth } from "../lib/auth";
 import { fieldErrors } from "../lib/forms";
+import { describePasswordRules } from "../lib/password";
 import { roleMeta } from "../lib/permissions";
 import { type ThemeChoice, useTheme } from "../lib/theme";
 
@@ -78,6 +80,146 @@ function SecurityCard({ settings, onSaved }: { settings?: AppSettings; onSaved: 
           </p>
         )}
       </Card.Content>
+    </Card>
+  );
+}
+
+const MIN_LENGTH_RANGE = [8, 128] as const;
+const EXPIRY_DAYS_RANGE = [1, 3650] as const;
+const DEFAULT_EXPIRY_DAYS = 90;
+
+function PasswordRulesCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
+  const { can, refresh } = useAuth();
+  const isAdmin = can("admin");
+  const saved = settings?.password_policy;
+  const [form, setForm] = useState<PasswordPolicy | null>(null);
+  // Remembered so turning expiry off and on again keeps the number typed.
+  const [days, setDays] = useState<number | null>(DEFAULT_EXPIRY_DAYS);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!saved) return;
+    setForm(saved);
+    setDays(saved.expiry_days ?? DEFAULT_EXPIRY_DAYS);
+  }, [saved]);
+
+  const set = <K extends keyof PasswordPolicy>(key: K, value: PasswordPolicy[K]) => {
+    setForm((f) => (f ? { ...f, [key]: value } : f));
+    setErrors({});
+  };
+  const dirty = !!form && !!saved && JSON.stringify(form) !== JSON.stringify(saved);
+
+  async function save() {
+    if (!form || !settings) return;
+    const local: Record<string, string> = {};
+    const [minLen, maxLen] = MIN_LENGTH_RANGE;
+    if (!(form.min_length >= minLen && form.min_length <= maxLen)) {
+      local.password_min_length = `Enter a length from ${minLen} to ${maxLen}.`;
+    }
+    const [minDays, maxDays] = EXPIRY_DAYS_RANGE;
+    if (form.expiry_days != null && !(form.expiry_days >= minDays && form.expiry_days <= maxDays)) {
+      local.password_expiry_days = `Enter ${minDays} to ${maxDays} days.`;
+    }
+    if (Object.keys(local).length) return setErrors(local);
+    setBusy(true);
+    try {
+      await api.updateSettings({ ...settings, password_policy: form });
+      await refresh();
+      onSaved();
+      toast.success("Password rules saved");
+    } catch (e) {
+      const fields = fieldErrors(e);
+      if (Object.keys(fields).length) setErrors(fields);
+      else toast.danger(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const expires = saved?.expiry_days;
+  return (
+    <Card>
+      <Card.Header>
+        <LockableTitle locked={!isAdmin}>Password rules</LockableTitle>
+        <Card.Description>
+          What new passwords must contain, and how long a password lasts. Existing passwords keep working;
+          the rules apply to the next one each person chooses, including when theirs expires.
+        </Card.Description>
+      </Card.Header>
+      <Card.Content>
+        {!isAdmin || !form ? (
+          <p className="text-sm text-muted">
+            {saved ? (
+              <>
+                {describePasswordRules(saved)}{" "}
+                {expires ? `Passwords expire after ${expires} days.` : "Passwords don't expire."}
+                {!isAdmin && " An administrator can change this."}
+              </>
+            ) : (
+              "Loading…"
+            )}
+          </p>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <NumberInput
+              label="Minimum length (characters)"
+              value={form.min_length}
+              onChange={(v) => set("min_length", v == null ? 0 : Math.trunc(v))}
+              minValue={MIN_LENGTH_RANGE[0]}
+              error={errors.password_min_length}
+              className="max-w-xs"
+            />
+            <SwitchInput
+              label="Require a capital letter"
+              isSelected={form.require_uppercase}
+              onChange={(v) => set("require_uppercase", v)}
+            />
+            <SwitchInput
+              label="Require a number"
+              isSelected={form.require_number}
+              onChange={(v) => set("require_number", v)}
+            />
+            <SwitchInput
+              label="Require a special character"
+              description="Anything other than a letter, number, or space, such as ! # $ or -."
+              isSelected={form.require_symbol}
+              onChange={(v) => set("require_symbol", v)}
+            />
+            <SwitchInput
+              label="Passwords expire"
+              description="When a password is older than this, its owner must choose a new one the next time they sign in."
+              isSelected={form.expiry_days != null}
+              onChange={(on) => set("expiry_days", on ? (days ?? DEFAULT_EXPIRY_DAYS) : null)}
+            />
+            {form.expiry_days != null && (
+              <NumberInput
+                label="Expire after (days)"
+                value={form.expiry_days}
+                onChange={(v) => {
+                  const n = v == null ? null : Math.trunc(v);
+                  setDays(n);
+                  set("expiry_days", n ?? 0);
+                }}
+                minValue={EXPIRY_DAYS_RANGE[0]}
+                error={errors.password_expiry_days}
+                className="max-w-xs"
+              />
+            )}
+          </div>
+        )}
+      </Card.Content>
+      {isAdmin && form && (
+        <Card.Footer className="flex gap-2">
+          <Button variant="secondary" isPending={busy} isDisabled={!dirty} onPress={() => void save()}>
+            Save
+          </Button>
+          {dirty && (
+            <Button variant="tertiary" isDisabled={busy} onPress={() => saved && setForm(saved)}>
+              Discard changes
+            </Button>
+          )}
+        </Card.Footer>
+      )}
     </Card>
   );
 }
@@ -566,6 +708,7 @@ export function SettingsPage() {
               </Card>
             )}
             <SecurityCard settings={settings.data} onSaved={settings.reload} />
+            <PasswordRulesCard settings={settings.data} onSaved={settings.reload} />
             <AttachmentsFolderCard settings={settings.data} onSaved={settings.reload} />
             <UpdatesCard version={data?.version} settings={settings.data} onSaved={settings.reload} />
           </>

@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use chrono::{Days, Local, NaiveDate};
 use polaris_core::audit::{Actor, AuditFilter, WriteContext};
-use polaris_core::auth::{NewUser, UserUpdate, verify_password};
+use polaris_core::auth::{NewUser, PasswordPolicy, UserUpdate, verify_password};
 use polaris_core::certificate::*;
 use polaris_core::model::*;
 use polaris_core::{Error, Store};
@@ -221,7 +221,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 16);
+    assert_eq!(info.schema_version, 17);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -1727,6 +1727,77 @@ async fn sign_ins_are_audited() {
 }
 
 #[tokio::test]
+async fn password_rules_apply_to_new_passwords_and_expiry_is_recorded() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    // Existing accounts keep their passwords; the clock for expiry is running.
+    let admin = s.get_user(1).await.unwrap();
+    assert!(admin.password_changed_at.is_some());
+
+    let mut settings = s.settings().await.unwrap();
+    assert_eq!(settings.password_policy, PasswordPolicy::default());
+    settings.password_policy = PasswordPolicy {
+        min_length: 12,
+        require_uppercase: true,
+        require_number: true,
+        require_symbol: true,
+        expiry_days: Some(90),
+    };
+    let saved = s.update_settings(&ctx(), settings.clone()).await.unwrap();
+    assert_eq!(saved.password_policy, settings.password_policy);
+    assert_eq!(
+        s.settings().await.unwrap().password_policy,
+        settings.password_policy
+    );
+    let audit = s
+        .list_audit(&AuditFilter {
+            entity: Some(AuditEntity::Settings),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let fields: Vec<_> = audit[0].changes.iter().map(|c| c.field.as_str()).collect();
+    assert!(fields.contains(&"Passwords expire after"), "{fields:?}");
+
+    // New accounts and new passwords follow the rules.
+    let weak = s.create_user(&ctx(), new_user("weak", Role::Viewer)).await;
+    assert!(matches!(weak, Err(Error::Validation(ref e)) if e[0].field == "password"));
+    let mut strong = new_user("strong", Role::Viewer);
+    strong.password = "Strong-pass 2026".into();
+    let user = s.create_user(&ctx(), strong).await.unwrap();
+    let first_set = user.password_changed_at.unwrap();
+    assert!(
+        s.set_password(&ctx(), user.id, "no capitals 2026!", false)
+            .await
+            .is_err()
+    );
+    let reset = s
+        .set_password(&ctx(), user.id, "Another-one 2027", false)
+        .await
+        .unwrap();
+    assert!(reset.password_changed_at.unwrap() >= first_set);
+
+    // An expired password: the user must change it, and it's in the history.
+    let expired = s.expire_password(&reset).await.unwrap();
+    assert!(expired.must_change_password);
+    let again = s.expire_password(&expired).await.unwrap();
+    assert_eq!(again.row_version, expired.row_version, "only once");
+    let history = s
+        .list_audit(&AuditFilter {
+            entity: Some(AuditEntity::User),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(history[0].action, AuditAction::PasswordExpired);
+    assert_eq!(history[0].user_id, Some(user.id));
+
+    // Out-of-range settings are refused.
+    settings.password_policy.min_length = 4;
+    assert!(s.update_settings(&ctx(), settings).await.is_err());
+}
+
+#[tokio::test]
 async fn password_reset_requests_wait_for_a_new_password() {
     let h = harness().await;
     let s = h.store.as_ref();
@@ -1924,6 +1995,7 @@ async fn settings_are_validated_and_audited() {
                 update_checks: true,
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
+                password_policy: Default::default(),
             },
         )
         .await;
@@ -1936,6 +2008,7 @@ async fn settings_are_validated_and_audited() {
             update_checks: true,
             currency_symbol: "$".into(),
             date_format: "system".into(),
+            password_policy: Default::default(),
         },
     )
     .await
@@ -2162,6 +2235,7 @@ async fn attachments_folder_setting_round_trips() {
                 update_checks: true,
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
+                password_policy: Default::default(),
             },
         )
         .await
@@ -2181,6 +2255,7 @@ async fn attachments_folder_setting_round_trips() {
                 update_checks: true,
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
+                password_policy: Default::default(),
             },
         )
         .await;
@@ -2195,6 +2270,7 @@ async fn attachments_folder_setting_round_trips() {
             update_checks: true,
             currency_symbol: "$".into(),
             date_format: "system".into(),
+            password_policy: Default::default(),
         },
     )
     .await
@@ -2308,6 +2384,7 @@ async fn populate(store: &dyn Store) {
                 update_checks: true,
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
+                password_policy: Default::default(),
             },
         )
         .await

@@ -7,6 +7,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::auth::PasswordPolicy;
 use crate::{Error, FieldError, Id, Result};
 
 /// Declares a fieldless enum that is stored in the database as a lowercase
@@ -160,6 +161,8 @@ text_enum!(
         PasswordReset => "password_reset",
         /// Someone asked for a password reset from the sign-in screen.
         PasswordResetRequest => "password_reset_request",
+        /// A password reached the end of its life at sign-in and must be changed.
+        PasswordExpired => "password_expired",
         /// All data was copied from this database to another one.
         Export => "export",
         /// This database was filled with data copied from another one.
@@ -629,6 +632,9 @@ pub struct AppSettings {
     /// "system" follows each PC's Windows region setting.
     #[serde(default = "default_date_format")]
     pub date_format: String,
+    /// What new passwords must contain and how long passwords last.
+    #[serde(default)]
+    pub password_policy: PasswordPolicy,
 }
 
 fn default_currency() -> String {
@@ -680,6 +686,7 @@ impl AppSettings {
                 "Choose one of the listed date formats.",
             ));
         }
+        self.password_policy.normalize()?;
         if !(1..=240).contains(&self.idle_lock_minutes) {
             return Err(Error::validation(
                 "idle_lock_minutes",
@@ -717,6 +724,7 @@ impl Default for AppSettings {
             update_checks: true,
             currency_symbol: Self::DEFAULT_CURRENCY.into(),
             date_format: Self::DEFAULT_DATE_FORMAT.into(),
+            password_policy: PasswordPolicy::default(),
         }
     }
 }
@@ -810,6 +818,7 @@ mod tests {
             update_checks: true,
             currency_symbol: "$".into(),
             date_format: "system".into(),
+            ..Default::default()
         };
         s.normalize().unwrap();
         assert_eq!(s.attachments_root, None, "blank means unset");
@@ -821,6 +830,7 @@ mod tests {
                 update_checks: true,
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
+                ..Default::default()
             };
             assert!(s.normalize().is_ok(), "{ok}");
         }
@@ -831,6 +841,7 @@ mod tests {
                 update_checks: true,
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
+                ..Default::default()
             };
             assert!(
                 matches!(s.normalize(), Err(Error::Validation(ref e)) if e[0].field == "attachments_root"),
@@ -843,6 +854,7 @@ mod tests {
             update_checks: true,
             currency_symbol: "$".into(),
             date_format: "system".into(),
+            ..Default::default()
         };
         assert!(s.normalize().is_err());
     }

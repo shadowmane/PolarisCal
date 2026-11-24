@@ -94,9 +94,17 @@ All of these live in `polaris-core` so every backend applies them identically.
 
   The UI hides what a role can't do, but every Tauri command checks the role itself
   (`require` in `src-tauri/src/commands.rs`), so hiding is never the protection.
-* **Passwords** are hashed with Argon2id (random salt per hash). Minimum 10 characters and not the
-  username. Admins can force a change at next sign-in; new accounts default to that. A failed sign-in
-  takes the same time whether or not the username exists.
+* **Passwords** are hashed with Argon2id (random salt per hash). Admins can force a change at next
+  sign-in; new accounts default to that. A failed sign-in takes the same time whether or not the
+  username exists.
+* **Password rules** (`PasswordPolicy`, Settings > Administration, stored in `app_settings`): a minimum
+  length (8 to 128, default 10), optionally a capital letter, a number, and a special character (not a
+  letter, number, or space), never the username, and optionally an expiry in days. Every new password
+  is checked (new accounts, resets, changes); existing ones aren't. `users.password_changed_at` is
+  stamped whenever a password is set (schema 17 starts existing accounts' clocks at the upgrade). At
+  sign-in an expired password is marked `must_change_password` (audited as "Password expired"), so
+  the user goes straight to choosing a new one. The rules travel in `auth_status` so the sign-in
+  screens can show and check them.
 * **Password reset requests**: after a failed sign-in the screen says to ask an administrator; after
   three for the same username it offers "Request password reset", which stamps
   `users.reset_requested_at` (active accounts only; the command succeeds either way, so it can't
@@ -148,7 +156,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 16) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 17) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -186,10 +194,21 @@ SQLite database in the same folder:
 }
 ```
 
-Administrators change it from **Settings > Database connection** (anyone may when PolarisCal can't
-connect, or when the database has no accounts yet, since they could edit the file anyway). Saving
-connects first (setting PolarisCal up in a new database) and only then writes the file; the user is
-signed out and signs in to the new database.
+Administrators change it from **Settings > Database connection**, or before signing in from the
+connection button in the top-left corner of the sign-in screens. There, if the current database
+works and has accounts, an administrator of it enters their username and password first
+(`unlock_connection_settings`, which unlocks the settings for 10 minutes without starting a session;
+failures are audited as failed sign-ins). Anyone may change it when PolarisCal can't connect, or when
+the database has no accounts yet, since they could edit the file anyway. Saving connects first
+(setting PolarisCal up in a new database) and only then writes the file; the user is signed out and
+signs in to the new database.
+
+The **connection light** (`connection_status`, available without signing in; shown on the sign-in
+screens and in the sidebar) is green when connected and set up (sign-in available), yellow when
+connected or the file was found but PolarisCal isn't set up there (no accounts), and red when the
+server refuses the connection or the file is missing. A missing SQLite file is only created on a
+brand-new install; afterwards it's reported, so a moved or deleted database never silently becomes a
+new empty one. **Try again** reopens the configured database (`retry_connection`).
 
 ### Shared settings file
 
@@ -207,7 +226,7 @@ Server with Windows login so no password is stored at all. A new computer's firs
 **Connect to an existing database** to follow the shared file instead of starting a new database.
 
 If the database can't be opened, the app still starts and shows the problem with options to retry
-or change the connection.
+(which really reconnects) or change the connection.
 
 ## Copying data between databases
 

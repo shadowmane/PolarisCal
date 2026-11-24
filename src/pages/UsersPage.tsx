@@ -11,10 +11,10 @@ import { useAuth } from "../lib/auth";
 import { EMPTY, formatDateTime } from "../lib/format";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
 import { ROLES, roleMeta } from "../lib/permissions";
+import { checkPassword, describePasswordRules } from "../lib/password";
 import { resetRequestsChanged } from "../lib/resetRequests";
 import { useAsync } from "../lib/useAsync";
 
-const MIN_PASSWORD = 10;
 const roleOptions = ROLES.map((r) => ({ id: r, label: roleMeta[r].label, description: roleMeta[r].description }));
 
 function DialogShell({
@@ -115,7 +115,8 @@ function NewUserDialog({
     const local: FieldErrors = {};
     if (!displayName.trim()) local.display_name = "Name is required.";
     if (!username.trim()) local.username = "Username is required.";
-    if (password.length < MIN_PASSWORD) local.password = `Use at least ${MIN_PASSWORD} characters.`;
+    const problem = checkPassword(password, username);
+    if (problem) local.password = problem;
     if (Object.keys(local).length) return setErrors(local);
     setBusy(true);
     try {
@@ -161,7 +162,7 @@ function NewUserDialog({
           error={errors.password}
           isRequired
           autoComplete="new-password"
-          description={`At least ${MIN_PASSWORD} characters. Give it to the user privately.`}
+          description={`${describePasswordRules()} Give it to the user privately.`}
         />
         <SwitchInput
           label="Require a new password at first sign-in"
@@ -358,7 +359,8 @@ function ResetPasswordDialog({
 
   async function save() {
     if (!user) return;
-    if (password.length < MIN_PASSWORD) return setErrors({ password: `Use at least ${MIN_PASSWORD} characters.` });
+    const problem = checkPassword(password, user.username);
+    if (problem) return setErrors({ password: problem });
     setBusy(true);
     try {
       await api.resetPassword(user.id, password, mustChange);
@@ -400,7 +402,7 @@ function ResetPasswordDialog({
           isRequired
           autoFocus
           autoComplete="new-password"
-          description={`At least ${MIN_PASSWORD} characters.`}
+          description={describePasswordRules()}
         />
         <SwitchInput label="Require a new password at next sign-in" isSelected={mustChange} onChange={setMustChange} />
       </form>

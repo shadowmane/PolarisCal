@@ -11,7 +11,7 @@ use polaris_core::audit::{
     lookup_snapshot, user_snapshot,
 };
 use polaris_core::auth::{
-    NewUser, User, UserCredentials, UserUpdate, check_password_rules, hash_password,
+    NewUser, PasswordPolicy, User, UserCredentials, UserUpdate, hash_password,
 };
 use polaris_core::certificate::{
     Certificate, CertificateDetails, CertificateFilter, CertificateKind, CertificateSigner,
@@ -899,7 +899,8 @@ async fn fetch_lookup(conn: &mut Conn, kind: LookupKind, id: Id) -> Result<Looku
 
 const USER_COLUMNS: &str =
     "id, username, display_name, email, role, is_active, must_change_password,
-                            last_sign_in_at, reset_requested_at, row_version, created_at, updated_at";
+                            last_sign_in_at, password_changed_at, reset_requested_at, row_version,
+                            created_at, updated_at";
 
 fn map_user(row: &Row) -> Result<User> {
     Ok(User {
@@ -911,6 +912,7 @@ fn map_user(row: &Row) -> Result<User> {
         is_active: row.get("is_active")?,
         must_change_password: row.get("must_change_password")?,
         last_sign_in_at: row.get("last_sign_in_at")?,
+        password_changed_at: row.get("password_changed_at")?,
         reset_requested_at: row.get("reset_requested_at")?,
         row_version: row.get("row_version")?,
         created_at: row.get("created_at")?,
@@ -939,8 +941,8 @@ async fn insert_user(conn: &mut Conn, input: &NewUser) -> Result<Id> {
     let hash = hash_password(&input.password)?;
     conn.insert(
         "INSERT INTO users (username, display_name, email, role, password_hash,
-                            must_change_password, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+                            must_change_password, password_changed_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
         params![
             &input.username,
             &input.display_name,
@@ -1313,7 +1315,8 @@ impl Store for SqlStore {
     async fn create_first_admin(&self, mut input: NewUser) -> Result<User> {
         input.role = Role::Admin;
         input.must_change_password = false;
-        input.normalize()?;
+        let policy = self.settings().await?.password_policy;
+        input.normalize(&policy)?;
         let mut tx = self.begin().await?;
         let existing = tx
             .scalar("SELECT COUNT(*) AS n FROM users", params![])
@@ -1399,6 +1402,38 @@ impl Store for SqlStore {
         Ok(())
     }
 
+    async fn expire_password(&self, user: &User) -> Result<User> {
+        let mut tx = self.begin().await?;
+        let before = fetch_user(&mut tx, user.id).await?;
+        if before.must_change_password {
+            return Ok(before);
+        }
+        tx.execute(
+            "UPDATE users SET must_change_password = ?2, updated_at = ?3,
+                              row_version = row_version + 1
+             WHERE id = ?1",
+            params![user.id, true, now()],
+        )
+        .await?;
+        let after = fetch_user(&mut tx, user.id).await?;
+        let ctx = WriteContext::new(
+            Actor {
+                user_id: user.id,
+                username: user.username.clone(),
+            },
+            None,
+        );
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(&ctx, AuditAction::PasswordExpired, AuditEntity::User)
+                .subject(user.id, &after.username)
+                .changes(diff(&user_snapshot(&before), &user_snapshot(&after))),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(after)
+    }
+
     async fn request_password_reset(&self, username: &str) -> Result<()> {
         let mut tx = self.begin().await?;
         let sql = format!("SELECT {USER_COLUMNS} FROM users WHERE LOWER(username) = LOWER(?1)");
@@ -1465,7 +1500,8 @@ impl Store for SqlStore {
     }
 
     async fn create_user(&self, ctx: &WriteContext, mut input: NewUser) -> Result<User> {
-        input.normalize()?;
+        let policy = self.settings().await?.password_policy;
+        input.normalize(&policy)?;
         let mut tx = self.begin().await?;
         let id = insert_user(&mut tx, &input).await?;
         let user = fetch_user(&mut tx, id).await?;
@@ -1545,14 +1581,16 @@ impl Store for SqlStore {
         new_password: &str,
         must_change: bool,
     ) -> Result<User> {
+        let policy = self.settings().await?.password_policy;
         let mut tx = self.begin().await?;
         let before = fetch_user(&mut tx, user_id).await?;
-        check_password_rules(&before.username, new_password)?;
+        policy.check(&before.username, new_password)?;
         let own = ctx.actor.user_id == user_id;
         let must_change = !own && must_change;
         tx.execute(
             "UPDATE users SET password_hash = ?2, must_change_password = ?3, updated_at = ?4,
-                              reset_requested_at = NULL, row_version = row_version + 1
+                              password_changed_at = ?4, reset_requested_at = NULL,
+                              row_version = row_version + 1
              WHERE id = ?1",
             params![user_id, hash_password(new_password)?, must_change, now()],
         )
@@ -1606,6 +1644,22 @@ impl Store for SqlStore {
             date_format: value("date_format")
                 .filter(|v| AppSettings::DATE_FORMATS.contains(&v.as_str()))
                 .unwrap_or_else(|| AppSettings::DEFAULT_DATE_FORMAT.into()),
+            password_policy: {
+                let default = PasswordPolicy::default();
+                let flag = |key: &str| value(key).is_some_and(|v| v == "true");
+                PasswordPolicy {
+                    min_length: value("password_min_length")
+                        .and_then(|v| v.parse().ok())
+                        .filter(|n| PasswordPolicy::MIN_LENGTH_RANGE.contains(n))
+                        .unwrap_or(default.min_length),
+                    require_uppercase: flag("password_require_uppercase"),
+                    require_number: flag("password_require_number"),
+                    require_symbol: flag("password_require_symbol"),
+                    expiry_days: value("password_expiry_days")
+                        .and_then(|v| v.parse().ok())
+                        .filter(|n| PasswordPolicy::EXPIRY_DAYS_RANGE.contains(n)),
+                }
+            },
         })
     }
 
@@ -1627,6 +1681,30 @@ impl Store for SqlStore {
             ("update_checks", settings.update_checks.to_string()),
             ("currency_symbol", settings.currency_symbol.clone()),
             ("date_format", settings.date_format.clone()),
+            (
+                "password_min_length",
+                settings.password_policy.min_length.to_string(),
+            ),
+            (
+                "password_require_uppercase",
+                settings.password_policy.require_uppercase.to_string(),
+            ),
+            (
+                "password_require_number",
+                settings.password_policy.require_number.to_string(),
+            ),
+            (
+                "password_require_symbol",
+                settings.password_policy.require_symbol.to_string(),
+            ),
+            (
+                "password_expiry_days",
+                settings
+                    .password_policy
+                    .expiry_days
+                    .map(|d| d.to_string())
+                    .unwrap_or_default(),
+            ),
         ];
         for (key, value) in pairs {
             let exists = tx
@@ -1672,8 +1750,46 @@ impl Store for SqlStore {
                 new: Some(settings.date_format.clone()),
             });
         }
+        let yes_no = |b: bool| Some(if b { "Yes" } else { "No" }.to_string());
+        let (old, new) = (&before.password_policy, &settings.password_policy);
+        let days =
+            |d: Option<u32>| Some(d.map_or_else(|| "Never".to_string(), |d| format!("{d} days")));
+        for (field, old, new) in [
+            (
+                "Minimum password length",
+                Some(old.min_length.to_string()),
+                Some(new.min_length.to_string()),
+            ),
+            (
+                "Passwords need a capital letter",
+                yes_no(old.require_uppercase),
+                yes_no(new.require_uppercase),
+            ),
+            (
+                "Passwords need a number",
+                yes_no(old.require_number),
+                yes_no(new.require_number),
+            ),
+            (
+                "Passwords need a special character",
+                yes_no(old.require_symbol),
+                yes_no(new.require_symbol),
+            ),
+            (
+                "Passwords expire after",
+                days(old.expiry_days),
+                days(new.expiry_days),
+            ),
+        ] {
+            if old != new {
+                changes.push(FieldChange {
+                    field: field.into(),
+                    old,
+                    new,
+                });
+            }
+        }
         if before.update_checks != settings.update_checks {
-            let yes_no = |b: bool| Some(if b { "Yes" } else { "No" }.to_string());
             changes.push(FieldChange {
                 field: "Check for updates".into(),
                 old: yes_no(before.update_checks),

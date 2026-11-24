@@ -51,3 +51,13 @@
     box-shadow: none !important;
   }
 }
+
+/* Messages often contain file paths or server names with no spaces to break at. Let them
+   wrap anywhere so they stay inside their box instead of running past its edge. */
+.alert__content {
+  min-width: 0;
+}
+.alert__title,
+.alert__description {
+  overflow-wrap: anywhere;
+}

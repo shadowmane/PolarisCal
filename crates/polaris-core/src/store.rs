@@ -58,6 +58,8 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         input: UserUpdate,
     ) -> Result<User>;
+    /// Marks an expired password: the user must choose a new one before going on.
+    async fn expire_password(&self, user: &User) -> Result<User>;
     /// Records a password reset request from the sign-in screen for the active account with
     /// this username (case-insensitive), for administrators to act on. Does nothing for an
     /// unknown or inactive account, or one that already has a request waiting, so the
