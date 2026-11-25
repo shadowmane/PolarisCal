@@ -17,6 +17,7 @@ export function ConfirmDialog({
   tone = "danger",
   askReason = false,
   reasonLabel = "Reason for change",
+  cancelLabel = "Cancel",
   onConfirm,
 }: {
   isOpen: boolean;
@@ -28,6 +29,8 @@ export function ConfirmDialog({
   askReason?: boolean;
   reasonLabel?: string;
   onConfirm: (reason: string) => Promise<unknown> | void;
+  /** The button that closes without doing anything. */
+  cancelLabel?: string;
 }) {
   const [busy, setBusy] = useState(false);
   const [reason, setReason] = useState("");
@@ -82,7 +85,7 @@ export function ConfirmDialog({
             </AlertDialog.Body>
             <AlertDialog.Footer>
               <Button slot="close" variant="tertiary" isDisabled={busy}>
-                Cancel
+                {cancelLabel}
               </Button>
               <Button variant={tone === "danger" ? "danger" : "primary"} isPending={busy} onPress={confirm}>
                 {confirmLabel}

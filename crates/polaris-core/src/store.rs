@@ -174,12 +174,24 @@ pub trait Store: Send + Sync {
     async fn list_reservations(&self, filter: &ReservationFilter) -> Result<Vec<Reservation>>;
     async fn get_reservation(&self, id: Id) -> Result<Reservation>;
     /// What's in the way of reserving an item for these dates (nothing, if it's free).
+    /// `exclude` is a reservation being changed, which doesn't count against itself.
     async fn check_reservation(
         &self,
         asset_id: Id,
         start: NaiveDate,
         end: NaiveDate,
+        exclude: Option<Id>,
     ) -> Result<ReservationCheck>;
+    /// Changes a booked reservation's dates and note. Once it has started, only the end can
+    /// move. Who may is checked by the caller.
+    async fn update_reservation(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        start: NaiveDate,
+        end: NaiveDate,
+        note: Option<String>,
+    ) -> Result<Reservation>;
     /// Reserves an item for the signed-in user. With `asks`, the dates overlap that one
     /// earlier reservation, whose holder is asked to end it early; the new reservation
     /// waits for their answer. Refused if the item is checked out or anything else is in

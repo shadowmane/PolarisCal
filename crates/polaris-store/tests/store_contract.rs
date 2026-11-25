@@ -2804,7 +2804,7 @@ async fn reservations_book_clash_and_end_early_on_request() {
 
     // Val books days 10-20.
     let check = s
-        .check_reservation(item.id, day(10), day(20))
+        .check_reservation(item.id, day(10), day(20), None)
         .await
         .unwrap();
     assert!(check.conflicts.is_empty() && check.checked_out_to.is_none());
@@ -2823,7 +2823,7 @@ async fn reservations_book_clash_and_end_early_on_request() {
 
     // Kim wants 15-25: clashes. The check names Val's and suggests the 21st.
     let check = s
-        .check_reservation(item.id, day(15), day(25))
+        .check_reservation(item.id, day(15), day(25), None)
         .await
         .unwrap();
     assert_eq!(check.conflicts.len(), 1);
@@ -2836,7 +2836,7 @@ async fn reservations_book_clash_and_end_early_on_request() {
     ));
     // Days 5-12 start before Val's: Val's can't be asked to end early for that.
     assert!(
-        s.check_reservation(item.id, day(5), day(12))
+        s.check_reservation(item.id, day(5), day(12), None)
             .await
             .unwrap()
             .can_ask
@@ -2939,7 +2939,15 @@ async fn reservations_book_clash_and_end_early_on_request() {
         "booked, declined, accepted, cancelled, and freed"
     );
 
-    // A checked-out item can't be reserved.
+    // A checked-out item can't be reserved. (Its reservations are cancelled first: while
+    // it's reserved, it can only go to whoever reserved it.)
+    for r in s
+        .list_reservations(&ReservationFilter::default())
+        .await
+        .unwrap()
+    {
+        s.cancel_reservation(&ctx(), r.id).await.unwrap();
+    }
     let owner = s
         .create_lookup(&ctx(), LookupKind::Owner, lookup("Lab Team"))
         .await
@@ -2953,7 +2961,7 @@ async fn reservations_book_clash_and_end_early_on_request() {
     .await
     .unwrap();
     assert_eq!(
-        s.check_reservation(item.id, day(50), day(51))
+        s.check_reservation(item.id, day(50), day(51), None)
             .await
             .unwrap()
             .checked_out_to
@@ -2975,6 +2983,182 @@ async fn reservations_book_clash_and_end_early_on_request() {
         .unwrap();
     assert!(history.iter().any(|e| e.action == AuditAction::Reserve));
     assert!(history.iter().any(|e| e.action == AuditAction::Accept));
+}
+
+#[tokio::test]
+async fn reservations_hold_items_for_whoever_reserved_them_and_can_be_changed() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let val = s
+        .create_user(&ctx(), new_user("vlee", Role::Viewer))
+        .await
+        .unwrap();
+    let owner = |name: &'static str| async move {
+        s.create_lookup(&ctx(), LookupKind::Owner, lookup(name))
+            .await
+            .unwrap()
+            .id
+    };
+    let (val_owner, team) = (owner("Val Lee").await, owner("Lab Team").await);
+    s.link_user_owner(&ctx(), val.id, Some(val_owner))
+        .await
+        .unwrap();
+    let item = s
+        .create_asset(&ctx(), asset_input(s, "HD-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let today = Local::now().date_naive();
+    let day = |n: u64| today + Days::new(n);
+
+    // Reserved by Val for days 3-5: until then it can only go to Val.
+    let r = s
+        .create_reservation(&as_user(&val), item.id, day(3), day(5), None, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        s.change_owner(&ctx(), &[item.id], OwnerChange::CheckOut { owner_id: team }).await,
+        Err(Error::Conflict(ref m)) if m.contains("reserved for")
+    ));
+    assert!(
+        s.request_owner_change(
+            &ctx(),
+            &[item.id],
+            OwnerChange::CheckOut { owner_id: team },
+            None
+        )
+        .await
+        .is_err()
+    );
+    // The handover to Val is fine, and so is checking it back in.
+    s.change_owner(
+        &ctx(),
+        &[item.id],
+        OwnerChange::CheckOut {
+            owner_id: val_owner,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        s.change_owner(&ctx(), &[item.id], OwnerChange::Transfer { owner_id: team })
+            .await
+            .is_err()
+    );
+    s.change_owner(&ctx(), &[item.id], OwnerChange::CheckIn)
+        .await
+        .unwrap();
+
+    // Val changes the dates (it hasn't started yet) and the note.
+    let moved = s
+        .update_reservation(&as_user(&val), r.id, day(6), day(9), Some("Moved".into()))
+        .await
+        .unwrap();
+    assert_eq!(
+        (moved.start_date, moved.end_date, moved.note.as_deref()),
+        (day(6), day(9), Some("Moved"))
+    );
+    // A change can't clash with another reservation.
+    let other = s
+        .create_user(&ctx(), new_user("other", Role::Viewer))
+        .await
+        .unwrap();
+    s.create_reservation(&as_user(&other), item.id, day(12), day(14), None, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        s.update_reservation(&as_user(&val), r.id, day(6), day(12), None)
+            .await,
+        Err(Error::Conflict(_))
+    ));
+    // Handed over: Val can still extend it while it's checked out to them.
+    s.change_owner(
+        &ctx(),
+        &[item.id],
+        OwnerChange::CheckOut {
+            owner_id: val_owner,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        s.update_reservation(&as_user(&val), r.id, day(6), day(10), None)
+            .await
+            .unwrap()
+            .end_date,
+        day(10)
+    );
+    s.change_owner(&ctx(), &[item.id], OwnerChange::CheckIn)
+        .await
+        .unwrap();
+
+    // Cancelled: it no longer holds the item for Val (only the later one, for "other", is left).
+    s.cancel_reservation(&as_user(&val), r.id).await.unwrap();
+    assert!(matches!(
+        s.change_owner(&ctx(), &[item.id], OwnerChange::CheckOut { owner_id: team }).await,
+        Err(Error::Conflict(ref m)) if m.contains("other name")
+    ));
+}
+
+#[tokio::test]
+async fn linked_owners_follow_their_user_and_are_managed_with_the_account() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let val = s
+        .create_user(&ctx(), new_user("vlee", Role::Viewer))
+        .await
+        .unwrap();
+    let owner = s
+        .create_lookup(&ctx(), LookupKind::Owner, lookup("Val Lee"))
+        .await
+        .unwrap();
+    s.link_user_owner(&ctx(), val.id, Some(owner.id))
+        .await
+        .unwrap();
+
+    // Not editable or deletable on the Lists page while linked.
+    assert!(matches!(
+        s.update_lookup(&ctx(), LookupKind::Owner, owner.id, lookup("Renamed")).await,
+        Err(Error::Conflict(ref m)) if m.contains("Users page")
+    ));
+    assert!(
+        s.delete_lookup(&ctx(), LookupKind::Owner, owner.id)
+            .await
+            .is_err()
+    );
+
+    // Deactivating the user deactivates the owner, and back.
+    let active = |id: i64| async move {
+        s.list_lookups(LookupKind::Owner, true)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|o| o.id == id)
+            .unwrap()
+            .is_active
+    };
+    let update = |u: &polaris_core::auth::User, on: bool| UserUpdate {
+        display_name: u.display_name.clone(),
+        email: None,
+        role: Role::Viewer,
+        is_active: on,
+    };
+    let off = s
+        .update_user(&ctx(), val.id, val.row_version, update(&val, false))
+        .await
+        .unwrap();
+    assert!(!active(owner.id).await);
+    s.update_user(&ctx(), val.id, off.row_version, update(&off, true))
+        .await
+        .unwrap();
+    assert!(active(owner.id).await);
+
+    // Unlinked, it's editable again.
+    s.link_user_owner(&ctx(), val.id, None).await.unwrap();
+    assert!(
+        s.update_lookup(&ctx(), LookupKind::Owner, owner.id, lookup("Renamed"))
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]

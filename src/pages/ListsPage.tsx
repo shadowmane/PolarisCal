@@ -51,7 +51,8 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                 isAdmin
                   ? (key) => {
                       const item = byId.get(Number(key));
-                      if (item) setDialog({ open: true, item });
+                      // An owner linked to a user account is managed on the Users page.
+                      if (item && item.user_id == null) setDialog({ open: true, item });
                     }
                   : undefined
               }
@@ -75,14 +76,17 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                 {(item) => (
                   <Table.Row
                     id={item.id}
-                    className={`${isAdmin ? "cursor-pointer" : ""} ${item.is_active ? "" : "opacity-55"}`}
+                    className={`${isAdmin && item.user_id == null ? "cursor-pointer" : ""} ${item.is_active ? "" : "opacity-55"}`}
                   >
                     <Table.Cell className="font-medium">
                       <span className="flex items-center gap-1.5">
-                        {item.user_id != null && <UserRound className="size-3.5 text-accent" aria-label="User account" />}
+                        {item.user_id != null && (
+                          <span title={`A user account (${item.user_name}). Managed on the Users page.`} className="inline-flex">
+                            <UserRound className="size-3.5 text-accent" aria-label="User account" />
+                          </span>
+                        )}
                         {item.name}
                       </span>
-                      {item.user_name && <div className="text-xs font-normal text-muted">Linked to {item.user_name}</div>}
                     </Table.Cell>
                     <Table.Cell>{item.description ?? EMPTY}</Table.Cell>
                     {kind === "provider" && (

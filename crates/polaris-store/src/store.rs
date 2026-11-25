@@ -788,6 +788,17 @@ fn map_lookup(row: &Row, kind: LookupKind) -> Result<LookupItem> {
     })
 }
 
+/// An Owner entry linked to a user account is managed with the account (Users page).
+fn refuse_linked_owner(item: &LookupItem) -> Result<()> {
+    match &item.user_name {
+        Some(user) if item.user_id.is_some() => Err(Error::Conflict(format!(
+            "'{}' is linked to {user}'s account, so it's managed on the Users page. Unlink it there to change it here.",
+            item.name
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// The values for a kind's flag columns (in [`lookup_table`] order), applying defaults.
 fn lookup_extra(kind: LookupKind, input: &LookupInput) -> Vec<bool> {
     match kind {
@@ -1326,6 +1337,7 @@ async fn apply_owner_change(
     for id in ids {
         let before = fetch_asset(conn, id).await?;
         check_owner_change(&before, change)?;
+        check_reservation_hold(conn, &before, change).await?;
         conn.execute(
             "UPDATE assets SET owner_id = ?2, owner_since = ?3, updated_at = ?4,
                                row_version = row_version + 1
@@ -1504,14 +1516,16 @@ async fn overlapping_reservations(
     asset_id: Id,
     start: NaiveDate,
     end: NaiveDate,
+    exclude: Option<Id>,
 ) -> Result<Vec<Reservation>> {
     const SQL: &str = concat!(
         reservation_select!(),
         " WHERE r.asset_id = ?1 AND r.status IN ('active', 'pending')
             AND r.start_date <= ?3 AND r.end_date >= ?2
+            AND (?4 IS NULL OR r.id <> ?4)
           ORDER BY r.start_date, r.id"
     );
-    conn.fetch_all(SQL, params![asset_id, start, end])
+    conn.fetch_all(SQL, params![asset_id, start, end, exclude])
         .await?
         .iter()
         .map(map_reservation)
@@ -1532,14 +1546,16 @@ async fn reservation_check(
     asset: &Asset,
     start: NaiveDate,
     end: NaiveDate,
+    changing: Option<&Reservation>,
 ) -> Result<ReservationCheck> {
+    let exclude = changing.map(|r| r.id);
     if end < start {
         return Err(Error::validation(
             "end_date",
             "The reservation must end on or after the day it starts.",
         ));
     }
-    let conflicts = overlapping_reservations(conn, asset.id, start, end).await?;
+    let conflicts = overlapping_reservations(conn, asset.id, start, end, exclude).await?;
     let can_ask = match conflicts.as_slice() {
         [only] if only.status == ReservationStatus::Active && only.start_date < start => {
             Some(only.clone())
@@ -1556,6 +1572,7 @@ async fn reservation_check(
             asset.id,
             candidate,
             candidate + chrono::Duration::days(days),
+            exclude,
         )
         .await?;
         match clash.iter().map(|r| r.end_date).max() {
@@ -1566,12 +1583,54 @@ async fn reservation_check(
             Some(last) => candidate = last + chrono::Duration::days(1),
         }
     }
+    // Checked out to the person whose reservation is being changed: that's the handover,
+    // not something in the way.
+    let with_holder =
+        changing.is_some_and(|r| asset.owner_id.is_some() && asset.owner_id == r.user_owner_id);
     Ok(ReservationCheck {
-        checked_out_to: asset.owner_id.and(asset.owner_name.clone()),
+        checked_out_to: if with_holder {
+            None
+        } else {
+            asset.owner_id.and(asset.owner_name.clone())
+        },
         conflicts,
         can_ask,
         next_free_start,
     })
+}
+
+/// An item with a booked reservation (current or upcoming) can only go to the person it's
+/// reserved for (their linked Owner entry), until that reservation ends or is cancelled.
+async fn check_reservation_hold(conn: &mut Conn, asset: &Asset, change: OwnerChange) -> Result<()> {
+    let to = match change {
+        OwnerChange::CheckOut { owner_id } | OwnerChange::Transfer { owner_id } => owner_id,
+        OwnerChange::CheckIn => return Ok(()),
+    };
+    const SQL: &str = concat!(
+        reservation_select!(),
+        " WHERE r.asset_id = ?1 AND r.status = 'active' AND r.end_date >= ?2
+          ORDER BY r.start_date, r.id"
+    );
+    let next = conn
+        .fetch_all(SQL, params![asset.id, today()])
+        .await?
+        .first()
+        .map(map_reservation)
+        .transpose()?;
+    match next {
+        Some(r) if r.user_owner_id != Some(to) => Err(Error::Conflict(format!(
+            "{} is reserved for {} ({}). Until that reservation ends or is cancelled, it can only go to them{}.",
+            asset.asset_tag,
+            r.user_name,
+            reservation_span(r.start_date, r.end_date),
+            if r.user_owner_id.is_none() {
+                ", once their account is linked to an Owner entry"
+            } else {
+                ""
+            }
+        ))),
+        _ => Ok(()),
+    }
 }
 
 fn check_reservable(asset: &Asset) -> Result<()> {
@@ -1976,6 +2035,14 @@ impl Store for SqlStore {
                 .changes(diff(&user_snapshot(&before), &user_snapshot(&after))),
         )
         .await?;
+        if before.is_active != after.is_active {
+            // Their Owner entry is active exactly when they are.
+            tx.execute(
+                "UPDATE owners SET is_active = ?2, updated_at = ?3 WHERE user_id = ?1",
+                params![id, after.is_active, now()],
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(after)
     }
@@ -2363,6 +2430,7 @@ impl Store for SqlStore {
         );
         let mut tx = self.begin().await?;
         let before = fetch_lookup(&mut tx, kind, id).await?;
+        refuse_linked_owner(&before)?;
         // The built-in Calibration Extension type never counts as a calibration.
         if before.is_extension == Some(true) {
             input.counts_as_calibration = Some(false);
@@ -2415,6 +2483,7 @@ impl Store for SqlStore {
         let (table, _) = lookup_table(kind);
         let mut tx = self.begin().await?;
         let item = fetch_lookup(&mut tx, kind, id).await?;
+        refuse_linked_owner(&item)?;
         if item.is_extension == Some(true) {
             return Err(Error::Conflict(format!(
                 "'{}' is built in and can't be deleted. Make it inactive if you don't use extensions.",
@@ -2750,6 +2819,7 @@ impl Store for SqlStore {
         for id in ids {
             let asset = fetch_asset(&mut tx, id).await?;
             check_owner_change(&asset, change)?;
+            check_reservation_hold(&mut tx, &asset, change).await?;
             let waiting = tx
                 .fetch_optional(
                     "SELECT requested_by FROM owner_requests WHERE asset_id = ?1 AND status = 'pending'",
@@ -2935,9 +3005,10 @@ impl Store for SqlStore {
         )
         .await?;
         if let Some(owner_id) = owner_id {
+            // A linked owner is active exactly when its user is.
             tx.execute(
-                "UPDATE owners SET user_id = ?2, updated_at = ?3 WHERE id = ?1",
-                params![owner_id, user_id, now()],
+                "UPDATE owners SET user_id = ?2, is_active = ?3, updated_at = ?4 WHERE id = ?1",
+                params![owner_id, user_id, before.is_active, now()],
             )
             .await?;
         }
@@ -2994,11 +3065,110 @@ impl Store for SqlStore {
         asset_id: Id,
         start: NaiveDate,
         end: NaiveDate,
+        exclude: Option<Id>,
     ) -> Result<ReservationCheck> {
         let mut conn = self.conn().await?;
         let asset = fetch_asset(&mut conn, asset_id).await?;
         check_reservable(&asset)?;
-        reservation_check(&mut conn, &asset, start, end).await
+        let changing = match exclude {
+            Some(id) => Some(fetch_reservation(&mut conn, id).await?),
+            None => None,
+        };
+        reservation_check(&mut conn, &asset, start, end, changing.as_ref()).await
+    }
+
+    async fn update_reservation(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        start: NaiveDate,
+        end: NaiveDate,
+        note: Option<String>,
+    ) -> Result<Reservation> {
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        let mut tx = self.begin().await?;
+        let before = fetch_reservation(&mut tx, id).await?;
+        if before.status != ReservationStatus::Active {
+            return Err(Error::Conflict(format!(
+                "Only a booked reservation can be changed (this one is {}).",
+                before.status
+            )));
+        }
+        let today = today();
+        if before.end_date < today {
+            return Err(Error::Conflict(
+                "This reservation has already finished.".into(),
+            ));
+        }
+        if start != before.start_date {
+            if before.start_date <= today {
+                return Err(Error::validation(
+                    "start_date",
+                    "It has already started, so only its end date can change.",
+                ));
+            }
+            if start < today {
+                return Err(Error::validation(
+                    "start_date",
+                    "A reservation can't start in the past.",
+                ));
+            }
+        }
+        if end < today {
+            return Err(Error::validation(
+                "end_date",
+                "A reservation can't end in the past. Cancel it instead.",
+            ));
+        }
+        let asset = fetch_asset(&mut tx, before.asset_id).await?;
+        let check = reservation_check(&mut tx, &asset, start, end, Some(&before)).await?;
+        let tag = &asset.asset_tag;
+        if let Some(holder) = &check.checked_out_to {
+            return Err(Error::Conflict(format!(
+                "{tag} is checked out to {holder}, so the reservation can't be moved onto it now."
+            )));
+        }
+        if let Some(first) = check.conflicts.first() {
+            return Err(Error::Conflict(format!(
+                "{tag} is already reserved {} by {}.",
+                reservation_span(first.start_date, first.end_date),
+                first.user_name
+            )));
+        }
+        tx.execute(
+            "UPDATE reservations SET start_date = ?2, end_date = ?3, note = ?4, updated_at = ?5
+             WHERE id = ?1",
+            params![id, start, end, &note, now()],
+        )
+        .await?;
+        let after = fetch_reservation(&mut tx, id).await?;
+        let mut changes = Vec::new();
+        if (before.start_date, before.end_date) != (after.start_date, after.end_date) {
+            changes.push(FieldChange {
+                field: "Reservation".into(),
+                old: Some(reservation_label(&before)),
+                new: Some(reservation_label(&after)),
+            });
+        }
+        if before.note != after.note {
+            changes.push(FieldChange {
+                field: "Reservation note".into(),
+                old: before.note.clone(),
+                new: after.note.clone(),
+            });
+        }
+        if !changes.is_empty() {
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::Asset)
+                    .subject(after.asset_id, &after.asset_tag)
+                    .asset(after.asset_id)
+                    .changes(changes),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(after)
     }
 
     async fn create_reservation(
@@ -3020,7 +3190,7 @@ impl Store for SqlStore {
         let mut tx = self.begin().await?;
         let asset = fetch_asset(&mut tx, asset_id).await?;
         check_reservable(&asset)?;
-        let check = reservation_check(&mut tx, &asset, start, end).await?;
+        let check = reservation_check(&mut tx, &asset, start, end, None).await?;
         let tag = &asset.asset_tag;
         if let Some(holder) = &check.checked_out_to {
             return Err(Error::Conflict(format!(
@@ -3138,6 +3308,7 @@ impl Store for SqlStore {
                 request.asset_id,
                 request.start_date,
                 request.end_date,
+                Some(request.id),
             )
             .await?
             .into_iter()

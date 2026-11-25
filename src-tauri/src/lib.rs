@@ -67,6 +67,7 @@ pub fn run() {
             commands::request_instrument,
             commands::list_reservations,
             commands::check_reservation,
+            commands::update_reservation,
             commands::create_reservation,
             commands::answer_reservation_request,
             commands::cancel_reservation,

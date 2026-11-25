@@ -12,6 +12,7 @@ import type { Asset } from "../bindings/Asset";
 import type { OwnerChange } from "../bindings/OwnerChange";
 import type { OwnerRequest } from "../bindings/OwnerRequest";
 import type { OwnerRequestStatus } from "../bindings/OwnerRequestStatus";
+import type { Reservation } from "../bindings/Reservation";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { EmptyNote, ErrorAlert, Loading, PageHeader, StatusChip } from "../components/common";
 import { SelectInput, TextInput } from "../components/fields";
@@ -21,6 +22,7 @@ import { useAuth } from "../lib/auth";
 import { dueStatusMeta, EMPTY, formatDate, formatDateTime } from "../lib/format";
 import { useLookups } from "../lib/lookups";
 import { ownerRequestsChanged } from "../lib/ownerRequests";
+import { todayYmd } from "../lib/reservations";
 import { useAsync } from "../lib/useAsync";
 
 type View = "available" | "out" | "requests";
@@ -68,11 +70,18 @@ export function InventoryPage() {
     () => api.listOwnerRequests({ decided_since: new Date(Date.now() - RECENT_DAYS * 86_400_000).toISOString() }),
     [],
   );
+  // Booked reservations from today on: an item can only go to whoever reserved it.
+  const reservations = useAsync(() => api.listReservations({ from: todayYmd() }), []);
+  const holds = new Map<number, Reservation>();
+  for (const r of reservations.data ?? []) {
+    if (r.status === "active" && !holds.has(r.asset_id)) holds.set(r.asset_id, r);
+  }
   const pending = (requests.data ?? []).filter((r) => r.status === "pending");
   const pendingFor = new Map(pending.map((r) => [r.asset_id, r]));
   const reloadAll = () => {
     items.reload();
     requests.reload();
+    reservations.reload();
     ownerRequestsChanged();
   };
   const all = items.data ?? [];
@@ -240,6 +249,7 @@ export function InventoryPage() {
                         </Link>
                         {a.parent_tag && <div className="text-xs text-muted">in {a.parent_tag}</div>}
                         {pendingFor.has(a.id) && <RequestedNote request={pendingFor.get(a.id)!} />}
+                        {holds.has(a.id) && <ReservedNote reservation={holds.get(a.id)!} />}
                       </Table.Cell>
                       <Table.Cell>{a.description}</Table.Cell>
                       <Table.Cell>{[a.manufacturer_name, a.model_number].filter(Boolean).join(" · ") || EMPTY}</Table.Cell>
@@ -281,6 +291,7 @@ export function InventoryPage() {
         action={action}
         request={!canEdit}
         items={chosen}
+        holds={holds}
         onClose={() => setAction(null)}
         onDone={() => {
           setAction(null);
@@ -303,6 +314,22 @@ const REQUEST_TEXT: Record<"check_out" | "transfer", { title: string; owner: str
   transfer: { title: "Request transfer of", owner: "Transfer to" },
 };
 
+function reservedSpan(r: Reservation): string {
+  return r.start_date === r.end_date ? formatDate(r.start_date) : `${formatDate(r.start_date)} – ${formatDate(r.end_date)}`;
+}
+
+/** Under an item's tag: it's reserved, so it can only go to that person for now. */
+function ReservedNote({ reservation: r }: { reservation: Reservation }) {
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+      <StatusChip color="warning">Pending reservation</StatusChip>
+      <span>
+        {r.user_name} · {reservedSpan(r)}
+      </span>
+    </div>
+  );
+}
+
 /** Under an item's tag: someone has asked for it. */
 function RequestedNote({ request }: { request: OwnerRequest }) {
   const what = request.kind === "check_out" ? "check out" : "transfer";
@@ -317,6 +344,7 @@ function OwnerDialog({
   action,
   request,
   items,
+  holds,
   onClose,
   onDone,
 }: {
@@ -324,6 +352,8 @@ function OwnerDialog({
   /** Ask a Technician or Administrator instead of making the change. */
   request: boolean;
   items: Asset[];
+  /** Reservations that hold some of the items for someone. */
+  holds: Map<number, Reservation>;
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -437,6 +467,29 @@ function OwnerDialog({
                       <Alert.Description>
                         {overdue.map((a) => a.asset_tag).join(", ")} {overdue.length === 1 ? "is" : "are"} overdue for
                         calibration.
+                      </Alert.Description>
+                    </Alert.Content>
+                  </Alert>
+                )}
+                {action !== "check_in" && items.some((a) => holds.has(a.id)) && (
+                  <Alert status="warning">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Title>Reserved</Alert.Title>
+                      <Alert.Description>
+                        <ul className="list-disc pl-4">
+                          {items
+                            .filter((a) => holds.has(a.id))
+                            .map((a) => {
+                              const r = holds.get(a.id)!;
+                              return (
+                                <li key={a.id}>
+                                  {a.asset_tag} is reserved for {r.user_name} ({reservedSpan(r)}). Until then it can only go
+                                  to them.
+                                </li>
+                              );
+                            })}
+                        </ul>
                       </Alert.Description>
                     </Alert.Content>
                   </Alert>

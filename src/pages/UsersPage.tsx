@@ -464,7 +464,6 @@ export function UsersPage() {
                 <Table.Column isRowHeader>Name</Table.Column>
                 <Table.Column>Username</Table.Column>
                 <Table.Column>Role</Table.Column>
-                <Table.Column>Owner entry</Table.Column>
                 <Table.Column>Last sign-in</Table.Column>
                 <Table.Column>State</Table.Column>
                 <Table.Column>
@@ -483,7 +482,6 @@ export function UsersPage() {
                     </Table.Cell>
                     <Table.Cell>{u.username}</Table.Cell>
                     <Table.Cell>{roleMeta[u.role].label}</Table.Cell>
-                    <Table.Cell>{u.owner_name ?? EMPTY}</Table.Cell>
                     <Table.Cell>{u.last_sign_in_at ? formatDateTime(u.last_sign_in_at) : EMPTY}</Table.Cell>
                     <Table.Cell>
                       <div className="flex flex-wrap gap-1.5">

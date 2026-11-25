@@ -328,7 +328,9 @@ transfer request for an item held by a linked owner is addressed to that user
 (`owner_requests.approver_user_id`), who approves or declines it (Technicians and Administrators
 still can); requests for unlinked owners, and check-out requests, go to Technicians and
 Administrators. **Request instrument** on an item's page asks its holder to hand it over to the
-requester's own Owner entry, so it needs the requester to be linked.
+requester's own Owner entry, so it needs the requester to be linked. A linked owner can't be edited
+or deleted on the Lists page (it's managed with the account), and it's active exactly when its
+user is: deactivating or reactivating the user, or linking, sets it.
 
 ## Reservations
 
@@ -343,6 +345,14 @@ returned. The reserve dialog checks the dates as they're picked (`check_reservat
   the only clash is a reservation that started earlier, **asking its holder to end theirs early**.
   That books the new reservation as *pending*; the holder accepts (theirs then ends the day before)
   or declines. Cancelling the earlier reservation lets a pending one go ahead.
+
+While an instrument has a booked reservation that hasn't ended, it can only be checked out or
+transferred (or requested) to the person it's reserved for, through their linked Owner entry:
+everything else is refused until that reservation ends or is cancelled. Available Inventory shows
+such instruments with a **Pending reservation** badge. Check-in is never held up. The person a
+reservation is for (or a Technician or Administrator) can **edit** its dates and note while it's
+booked; once it has started only its end can move, and the change is checked like a new
+reservation (not counting itself, nor the instrument being checked out to them).
 
 The **Reservations** page lists instruments free to reserve now (not checked out, retired, away for
 service, or reserved today) with each one's next booking, the user's own reservations, and a month

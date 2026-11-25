@@ -38,6 +38,8 @@ export function ReservationsPage() {
   const [reserving, setReserving] = useState<{ open: boolean; asset: Asset | null }>({ open: false, asset: null });
   const [shown, setShown] = useState<Reservation | null>(null);
   const [dayList, setDayList] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Reservation | null>(null);
+  const [cancelling, setCancelling] = useState<Reservation | null>(null);
 
   // The calendar shows whole weeks around the month.
   const first = fromYmd(`${month}-01`);
@@ -168,6 +170,14 @@ export function ReservationsPage() {
                         )}
                       </button>
                       {r.start_date <= today && r.status === "active" && <StatusChip color="success">Now</StatusChip>}
+                      {r.status === "active" && (
+                        <Button size="sm" variant="ghost" onPress={() => setEditing(r)}>
+                          Edit
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" className="text-danger" onPress={() => setCancelling(r)}>
+                        Cancel
+                      </Button>
                     </li>
                   ))}
                 </ul>
@@ -265,6 +275,31 @@ export function ReservationsPage() {
         choices={choices}
         onDone={reload}
       />
+      <ReserveDialog
+        isOpen={!!editing}
+        onOpenChange={(open) => !open && setEditing(null)}
+        asset={null}
+        editing={editing}
+        onDone={reload}
+      />
+      <ConfirmDialog
+        isOpen={!!cancelling}
+        onOpenChange={(o) => !o && setCancelling(null)}
+        title={cancelling ? `Cancel your reservation of ${cancelling.asset_tag}?` : ""}
+        confirmLabel="Cancel reservation"
+        cancelLabel="Keep reservation"
+        onConfirm={async () => {
+          if (!cancelling) return;
+          await api.cancelReservation(cancelling.id);
+          toast.success("Reservation cancelled");
+          setCancelling(null);
+          reload();
+        }}
+      >
+        {cancelling
+          ? `${span(cancelling)}. It comes off the calendar, and the instrument is free for others again.`
+          : null}
+      </ConfirmDialog>
       <DayDialog day={dayList} list={dayList ? (byDay.get(dayList) ?? []) : []} onClose={() => setDayList(null)} onPick={setShown} />
       <ReservationDialog
         reservation={shown}
@@ -422,6 +457,7 @@ export function ReservationDialog({
               : `Decline ${r?.user_name}'s request?`
         }
         confirmLabel={confirm === "cancel" ? "Cancel reservation" : confirm === "accept" ? "End mine early" : "Decline"}
+        cancelLabel={confirm === "cancel" ? "Keep reservation" : "Cancel"}
         tone={confirm === "accept" ? "accent" : "danger"}
         askReason={confirm !== "cancel"}
         reasonLabel="Note (optional)"

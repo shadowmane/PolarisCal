@@ -163,8 +163,11 @@ export const api = {
     call<Reservation[]>("list_reservations", {
       filter: { asset_id: null, from: null, to: null, include_closed: false, ...filter },
     }),
-  checkReservation: (assetId: number, start: string, end: string) =>
-    call<ReservationCheck>("check_reservation", { asset_id: assetId, start, end }),
+  /** `exclude`: a reservation being changed, which doesn't count against itself. */
+  checkReservation: (assetId: number, start: string, end: string, exclude: number | null = null) =>
+    call<ReservationCheck>("check_reservation", { asset_id: assetId, start, end, exclude }),
+  updateReservation: (id: number, start: string, end: string, note: string | null) =>
+    call<Reservation>("update_reservation", { id, start, end, note: note || null }),
   /** Reserves an item for you; with `asks`, asks that reservation's holder to end theirs early. */
   createReservation: (assetId: number, start: string, end: string, note: string | null, asks: number | null = null) =>
     call<Reservation>("create_reservation", { asset_id: assetId, start, end, note: note || null, asks }),

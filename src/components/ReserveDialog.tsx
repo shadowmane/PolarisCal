@@ -6,6 +6,7 @@ import { Alert, Button, Modal, toast } from "@heroui/react";
 import { CalendarCheck, CalendarClock, Hand } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Asset } from "../bindings/Asset";
+import type { Reservation } from "../bindings/Reservation";
 import type { ReservationCheck } from "../bindings/ReservationCheck";
 import { ApiError, api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -23,6 +24,7 @@ export function ReserveDialog({
   onOpenChange,
   asset,
   choices,
+  editing = null,
   onDone,
 }: {
   isOpen: boolean;
@@ -30,6 +32,8 @@ export function ReserveDialog({
   /** The instrument to reserve, or null to choose one from `choices`. */
   asset: Asset | null;
   choices?: Asset[];
+  /** A reservation to change instead of making a new one. */
+  editing?: Reservation | null;
   onDone?: () => void;
 }) {
   const { user } = useAuth();
@@ -44,14 +48,16 @@ export function ReserveDialog({
 
   useEffect(() => {
     if (!isOpen) return;
-    setAssetId(asset?.id ?? null);
-    setStart(todayYmd());
-    setEnd(todayYmd());
-    setNote("");
+    setAssetId(editing?.asset_id ?? asset?.id ?? null);
+    setStart(editing?.start_date ?? todayYmd());
+    setEnd(editing?.end_date ?? todayYmd());
+    setNote(editing?.note ?? "");
     setCheck(undefined);
     setCheckError(undefined);
     setError(undefined);
-  }, [isOpen, asset]);
+  }, [isOpen, asset, editing]);
+  // Once a reservation has started, only its end can move.
+  const started = !!editing && editing.start_date <= todayYmd();
 
   // Check the dates as they change (a moment after the last change).
   useEffect(() => {
@@ -59,11 +65,14 @@ export function ReserveDialog({
     setCheckError(undefined);
     if (!isOpen || assetId == null || !start || !end) return;
     if (end < start) return setCheckError("The reservation must end on or after the day it starts.");
-    if (start < todayYmd()) return setCheckError("A reservation can't start in the past.");
+    if (start < todayYmd() && !(editing && start === editing.start_date)) {
+      return setCheckError("A reservation can't start in the past.");
+    }
+    if (end < todayYmd()) return setCheckError("A reservation can't end in the past.");
     let live = true;
     const timer = window.setTimeout(() => {
       api
-        .checkReservation(assetId, start, end)
+        .checkReservation(assetId, start, end, editing?.id ?? null)
         .then((c) => live && setCheck(c))
         .catch((e) => live && setCheckError(e instanceof ApiError ? e.message : String(e)));
     }, 250);
@@ -71,7 +80,7 @@ export function ReserveDialog({
       live = false;
       window.clearTimeout(timer);
     };
-  }, [isOpen, assetId, start, end]);
+  }, [isOpen, assetId, start, end, editing]);
 
   const chosen = asset ?? choices?.find((a) => a.id === assetId) ?? null;
   const free = !!check && !check.checked_out_to && check.conflicts.length === 0;
@@ -82,6 +91,14 @@ export function ReserveDialog({
     setBusy(true);
     setError(undefined);
     try {
+      if (editing) {
+        const changed = await api.updateReservation(editing.id, start, end, note);
+        toast.success(`Reservation of ${changed.asset_tag} now ${span(changed.start_date, changed.end_date)}`);
+        reservationsChanged();
+        onOpenChange(false);
+        onDone?.();
+        return;
+      }
       const r = await api.createReservation(assetId, start, end, note, asks);
       toast.success(
         r.status === "pending"
@@ -126,7 +143,13 @@ export function ReserveDialog({
           <Modal.Dialog>
             <Modal.CloseTrigger />
             <Modal.Header>
-              <Modal.Heading>{chosen ? `Reserve ${chosen.asset_tag}` : "Reserve an instrument"}</Modal.Heading>
+              <Modal.Heading>
+                {editing
+                  ? `Change reservation of ${editing.asset_tag}`
+                  : chosen
+                    ? `Reserve ${chosen.asset_tag}`
+                    : "Reserve an instrument"}
+              </Modal.Heading>
             </Modal.Header>
             <Modal.Body>
               <form
@@ -138,8 +161,10 @@ export function ReserveDialog({
                   if (free) void reserve();
                 }}
               >
-                {chosen && <p className="text-sm text-muted">{chosen.description}</p>}
-                {!asset && choices && (
+                {(editing || chosen) && (
+                  <p className="text-sm text-muted">{editing ? editing.asset_description : chosen?.description}</p>
+                )}
+                {!asset && !editing && choices && (
                   <SelectInput<number>
                     label="Instrument"
                     value={assetId}
@@ -149,7 +174,14 @@ export function ReserveDialog({
                   />
                 )}
                 <div className="grid grid-cols-2 gap-3">
-                  <DateInput label="From" value={start} onChange={setStart} isRequired />
+                  <DateInput
+                    label="From"
+                    value={start}
+                    onChange={setStart}
+                    isRequired
+                    isDisabled={started}
+                    description={started ? "It has started, so only the end can change." : undefined}
+                  />
                   <DateInput label="To" value={end} onChange={setEnd} isRequired />
                 </div>
                 <TextInput
@@ -163,7 +195,7 @@ export function ReserveDialog({
                 {checkError && <p className="text-sm text-danger">{checkError}</p>}
                 {free && (
                   <p className="flex items-center gap-2 text-sm text-success">
-                    <CalendarCheck className="size-4" /> Available for these dates.
+                    <CalendarCheck className="size-4" /> {editing ? "These dates are free." : "Available for these dates."}
                   </p>
                 )}
                 {check?.checked_out_to && (
@@ -199,7 +231,7 @@ export function ReserveDialog({
                         </ul>
                       </Alert.Description>
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {check.next_free_start && check.next_free_start !== start && (
+                        {check.next_free_start && check.next_free_start !== start && !started && (
                           <Button
                             size="sm"
                             variant="secondary"
@@ -212,7 +244,7 @@ export function ReserveDialog({
                             <CalendarClock className="size-4" /> Use {span(check.next_free_start, addDays(check.next_free_start, days - 1))}
                           </Button>
                         )}
-                        {check.can_ask && check.can_ask.user_id !== user.id && start && (
+                        {!editing && check.can_ask && check.can_ask.user_id !== user.id && start && (
                           <Button size="sm" variant="secondary" isDisabled={busy} onPress={() => void reserve(check.can_ask!.id)}>
                             <Hand className="size-4" /> Ask {check.can_ask.user_name} to end theirs on{" "}
                             {formatDate(addDays(start, -1))}
@@ -237,7 +269,7 @@ export function ReserveDialog({
                 Cancel
               </Button>
               <Button type="submit" form="reserve" isPending={busy} isDisabled={!free}>
-                Reserve
+                {editing ? "Save changes" : "Reserve"}
               </Button>
             </Modal.Footer>
           </Modal.Dialog>

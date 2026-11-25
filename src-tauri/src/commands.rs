@@ -815,9 +815,35 @@ pub async fn check_reservation(
     asset_id: Id,
     start: NaiveDate,
     end: NaiveDate,
+    exclude: Option<Id>,
 ) -> CmdResult<ReservationCheck> {
     let (store, _) = require(&state, Need::SignedIn).await?;
-    Ok(store.check_reservation(asset_id, start, end).await?)
+    Ok(store
+        .check_reservation(asset_id, start, end, exclude)
+        .await?)
+}
+
+/// Changes a reservation's dates or note: the person it's for, or a Technician or
+/// Administrator.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn update_reservation(
+    state: State<'_, AppState>,
+    id: Id,
+    start: NaiveDate,
+    end: NaiveDate,
+    note: Option<String>,
+) -> CmdResult<Reservation> {
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    let r = store.get_reservation(id).await?;
+    if r.user_id != me.id && !me.role.can_edit_records() {
+        return Err(CommandError::new(
+            ErrorKind::Forbidden,
+            "Only the person it's for, or a Technician or Administrator, can change this reservation.",
+        ));
+    }
+    Ok(store
+        .update_reservation(&ctx(&me, None), id, start, end, note)
+        .await?)
 }
 
 /// Reserves an item for the signed-in user (anyone may), or with `asks`, asks the holder
