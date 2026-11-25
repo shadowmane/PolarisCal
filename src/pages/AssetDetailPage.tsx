@@ -20,9 +20,10 @@ import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import { CalibrationDialog } from "../components/CalibrationDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ToggleSwitch } from "../components/fields";
-import { EmptyNote, ErrorAlert, Loading, Money, StatusChip } from "../components/common";
+import { CollapsibleCard, EmptyNote, ErrorAlert, Loading, Money, StatusChip } from "../components/common";
 import { AttachmentsPanel } from "../components/Attachments";
 import { AuditList } from "../components/AuditList";
+import { ItemPhotos, useHeight, useItemPhotos } from "../components/ItemPhotos";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import {
@@ -239,6 +240,19 @@ function HistoryCard({
 }
 
 function ChangeHistoryCard({ asset, version }: { asset: Asset; version: number }) {
+  return (
+    <CollapsibleCard
+      title="Change history"
+      description="Every change to this item and its service records: who, when, and why."
+      rememberAs="asset-change-history"
+    >
+      <ChangeHistory asset={asset} version={version} />
+    </CollapsibleCard>
+  );
+}
+
+/** Loads only when shown, i.e. while the card is open. */
+function ChangeHistory({ asset, version }: { asset: Asset; version: number }) {
   const [limit, setLimit] = useState(20);
   const entries = useAsync(
     () => api.listAudit({ asset_id: asset.id, limit: limit + 1 }),
@@ -247,12 +261,7 @@ function ChangeHistoryCard({ asset, version }: { asset: Asset; version: number }
   const shown = (entries.data ?? []).slice(0, limit);
   const more = (entries.data?.length ?? 0) > limit;
   return (
-    <Card>
-      <Card.Header>
-        <Card.Title>Change history</Card.Title>
-        <Card.Description>Every change to this item and its service records: who, when, and why.</Card.Description>
-      </Card.Header>
-      <Card.Content>
+    <>
         {entries.error && <ErrorAlert error={entries.error} onRetry={entries.reload} />}
         {entries.data && shown.length === 0 && (
           <EmptyNote icon={<History className="size-5" />} title="No recorded changes">
@@ -265,8 +274,7 @@ function ChangeHistoryCard({ asset, version }: { asset: Asset; version: number }
             Show older changes
           </Button>
         )}
-      </Card.Content>
-    </Card>
+    </>
   );
 }
 
@@ -282,6 +290,10 @@ export function AssetDetailPage() {
   const canEdit = can("edit_records");
   // Bumped after any save so the history and children re-load.
   const [version, setVersion] = useState(0);
+  // Photos of the item go beside Details, as tall as it is.
+  const photos = useItemPhotos(assetId, version);
+  const [detailsCard, setDetailsCard] = useState<HTMLDivElement | null>(null);
+  const detailsHeight = useHeight(detailsCard);
 
   if (error) return <ErrorAlert error={error} onRetry={reload} />;
   if (loading && !asset) return <Loading />;
@@ -358,8 +370,12 @@ export function AssetDetailPage() {
         </Alert>
       )}
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[3fr_2fr]">
-        <Card>
+      <div
+        className={`grid grid-cols-1 gap-6 ${photos.length ? "xl:grid-cols-[auto_minmax(0,3fr)_minmax(0,2fr)]" : "xl:grid-cols-[3fr_2fr]"}`}
+      >
+        {photos.length > 0 && <ItemPhotos photos={photos} detailsHeight={detailsHeight} />}
+        <div ref={setDetailsCard} className="min-w-0">
+        <Card className="h-full">
           <Card.Header>
             <Card.Title>Details</Card.Title>
           </Card.Header>
@@ -393,6 +409,7 @@ export function AssetDetailPage() {
             )}
           </Card.Content>
         </Card>
+        </div>
 
         <Card>
           <Card.Header>
@@ -421,22 +438,18 @@ export function AssetDetailPage() {
         onEdit={(record) => setDialog({ open: true, record })}
       />
 
-      <Card>
-        <Card.Header>
-          <Card.Title>Files</Card.Title>
-          <Card.Description>
-            Certificates, manuals, and photos for this item and its service records. Selecting a file opens it.
-          </Card.Description>
-        </Card.Header>
-        <Card.Content>
-          <AttachmentsPanel
-            key={version}
-            assetId={asset.id}
-            readOnly={asset.is_archived}
-            onChanged={() => setVersion((v) => v + 1)}
-          />
-        </Card.Content>
-      </Card>
+      <CollapsibleCard
+        title="Files"
+        description="Certificates, manuals, and photos for this item and its service records. Selecting a file opens it."
+        rememberAs="asset-files"
+      >
+        <AttachmentsPanel
+          key={version}
+          assetId={asset.id}
+          readOnly={asset.is_archived}
+          onChanged={() => setVersion((v) => v + 1)}
+        />
+      </CollapsibleCard>
 
       <ChangeHistoryCard asset={asset} version={version} />
 

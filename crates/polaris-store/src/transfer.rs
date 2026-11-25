@@ -190,6 +190,7 @@ pub(crate) const TABLES: &[TableSpec] = &[
             ("row_version", Int),
             ("created_at", Time),
             ("updated_at", Time),
+            ("storage_folder", Text),
         ],
     },
     TableSpec {

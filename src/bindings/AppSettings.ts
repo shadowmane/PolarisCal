@@ -10,10 +10,23 @@ export type AppSettings = {
  */
 idle_lock_minutes: number, 
 /**
- * Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where attached
- * files are stored. Attaching files is unavailable until it is set.
+ * Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where calibration
+ * certificates are stored, and the other types too unless they have their own folder.
+ * Attaching files is unavailable until it is set.
  */
 attachments_root: string | null, 
+/**
+ * Where photos go; the certificates folder when unset.
+ */
+photos_root: string | null, 
+/**
+ * Where service manuals go; the certificates folder when unset.
+ */
+service_manuals_root: string | null, 
+/**
+ * Where documents and other files go; the certificates folder when unset.
+ */
+documents_root: string | null, 
 /**
  * Whether PolarisCal checks online for new versions. Turn off where IT deploys updates.
  */

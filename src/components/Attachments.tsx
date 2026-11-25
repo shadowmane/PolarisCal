@@ -5,6 +5,7 @@ import { Button, Chip, toast, Tooltip } from "@heroui/react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Archive, ArchiveRestore, File, FileImage, FileText, FolderOpen, Paperclip, X } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 import type { Attachment } from "../bindings/Attachment";
 import type { AttachmentCategory } from "../bindings/AttachmentCategory";
 import { ApiError, api } from "../lib/api";
@@ -38,7 +39,7 @@ export function baseName(path: string): string {
 }
 
 /** Opens a file, offering to open it anyway if it changed since it was attached. */
-function useOpenAttachment() {
+export function useOpenAttachment() {
   const [changed, setChanged] = useState<{ attachment: Attachment; message: string } | null>(null);
 
   async function open(a: Attachment, force = false) {
@@ -95,7 +96,8 @@ export function AttachmentsPanel({
       api.listAttachments(
         calibrationId
           ? { calibration_id: calibrationId, include_archived: showArchived }
-          : { asset_id: assetId, include_archived: showArchived },
+          : // The item's own files, plus service manuals for the same manufacturer and model.
+            { asset_id: assetId, include_archived: showArchived, include_shared_manuals: true },
       ),
     [assetId, calibrationId, showArchived],
   );
@@ -161,6 +163,9 @@ export function AttachmentsPanel({
         {list.map((a) => {
           const Icon = fileIcon(a);
           const cat = attachmentCategoryMeta[a.category];
+          // A service manual attached to another item of the same manufacturer and model:
+          // it's managed (archived, restored) there.
+          const shared = !calibrationId && a.asset_id !== assetId;
           return (
             <li key={a.id} className={`flex items-center gap-3 py-2.5 ${a.is_archived ? "opacity-55" : ""}`}>
               <Icon className="size-5 shrink-0 text-muted" />
@@ -177,6 +182,15 @@ export function AttachmentsPanel({
                   <Chip size="sm" variant="soft" color={cat.color}>
                     {cat.label}
                   </Chip>
+                  {shared && (
+                    <span>
+                      Shared from{" "}
+                      <Link to={`/assets/${a.asset_id}`} className="text-accent hover:underline">
+                        {a.asset_tag}
+                      </Link>{" "}
+                      (same manufacturer and model)
+                    </span>
+                  )}
                   {!calibrationId && a.calibration_date && <span>Calibration of {formatDate(a.calibration_date)}</span>}
                   <span>{formatBytes(a.size_bytes)}</span>
                   <span>
@@ -192,7 +206,7 @@ export function AttachmentsPanel({
                 </Button>
                 <Tooltip.Content>Show in folder</Tooltip.Content>
               </Tooltip>
-              {canEdit && (
+              {canEdit && !shared && (
                 <Tooltip delay={300}>
                   <Button
                     isIconOnly

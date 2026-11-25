@@ -124,10 +124,11 @@ export const attachmentCategoryMeta: Record<AttachmentCategory, { label: string;
   certificate: { label: "Certificate", color: "accent" },
   document: { label: "Document", color: "default" },
   photo: { label: "Photo", color: "success" },
+  service_manual: { label: "Service manual", color: "warning" },
   other: { label: "Other", color: "default" },
 };
 
-export const ATTACHMENT_CATEGORIES: AttachmentCategory[] = ["certificate", "document", "photo", "other"];
+export const ATTACHMENT_CATEGORIES: AttachmentCategory[] = ["certificate", "photo", "service_manual", "document", "other"];
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

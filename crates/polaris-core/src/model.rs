@@ -201,9 +201,35 @@ text_enum!(
         Certificate => "certificate",
         Document => "document",
         Photo => "photo",
+        /// Shared by every item with the same manufacturer and model number.
+        ServiceManual => "service_manual",
         Other => "other",
     }
 );
+
+text_enum!(
+    /// Which of the attachment folders (Settings > Attachments folders) a file is kept in.
+    AttachmentFolder {
+        /// The main folder (`attachments_root`); also where the others fall back to.
+        Certificates => "certificates",
+        Photos => "photos",
+        ServiceManuals => "service_manuals",
+        /// Documents and other files.
+        Documents => "documents",
+    }
+);
+
+impl AttachmentCategory {
+    /// The folder files of this type go in.
+    pub fn folder(self) -> AttachmentFolder {
+        match self {
+            Self::Certificate => AttachmentFolder::Certificates,
+            Self::Photo => AttachmentFolder::Photos,
+            Self::ServiceManual => AttachmentFolder::ServiceManuals,
+            Self::Document | Self::Other => AttachmentFolder::Documents,
+        }
+    }
+}
 
 /// How often an item must be calibrated, e.g. 12 months.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -577,7 +603,9 @@ pub struct Attachment {
     pub category: AttachmentCategory,
     /// The original file name, as shown to users.
     pub file_name: String,
-    /// Path under the attachments folder, with `/` separators.
+    /// The folder it was saved in (the certificates folder if its own wasn't set then).
+    pub storage_folder: AttachmentFolder,
+    /// Path under that folder, with `/` separators.
     pub relative_path: String,
     pub size_bytes: i64,
     pub sha256: String,
@@ -597,6 +625,7 @@ pub struct NewAttachment {
     pub calibration_id: Option<Id>,
     pub category: AttachmentCategory,
     pub file_name: String,
+    pub storage_folder: AttachmentFolder,
     pub relative_path: String,
     pub size_bytes: i64,
     pub sha256: String,
@@ -611,6 +640,10 @@ pub struct AttachmentFilter {
     pub calibration_id: Option<Id>,
     #[serde(default)]
     pub include_archived: bool,
+    /// With `asset_id`: also the service manuals attached to other items with the same
+    /// manufacturer and model number.
+    #[serde(default)]
+    pub include_shared_manuals: bool,
 }
 
 /// Organization-wide settings stored in the database.
@@ -619,9 +652,19 @@ pub struct AttachmentFilter {
 pub struct AppSettings {
     /// Minutes without activity before the app locks and asks for the password.
     pub idle_lock_minutes: u32,
-    /// Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where attached
-    /// files are stored. Attaching files is unavailable until it is set.
+    /// Folder (ideally a UNC share such as `\\server\share\PolarisCal`) where calibration
+    /// certificates are stored, and the other types too unless they have their own folder.
+    /// Attaching files is unavailable until it is set.
     pub attachments_root: Option<String>,
+    /// Where photos go; the certificates folder when unset.
+    #[serde(default)]
+    pub photos_root: Option<String>,
+    /// Where service manuals go; the certificates folder when unset.
+    #[serde(default)]
+    pub service_manuals_root: Option<String>,
+    /// Where documents and other files go; the certificates folder when unset.
+    #[serde(default)]
+    pub documents_root: Option<String>,
     /// Whether PolarisCal checks online for new versions. Turn off where IT deploys updates.
     #[serde(default = "default_true")]
     pub update_checks: bool,
@@ -673,6 +716,9 @@ impl AppSettings {
     /// folder is reachable and writable is checked by the app, not here.
     pub fn normalize(&mut self) -> Result<()> {
         clean(&mut self.attachments_root);
+        clean(&mut self.photos_root);
+        clean(&mut self.service_manuals_root);
+        clean(&mut self.documents_root);
         self.currency_symbol = self.currency_symbol.trim().to_string();
         if self.currency_symbol.is_empty() || self.currency_symbol.chars().count() > 5 {
             return Err(Error::validation(
@@ -693,15 +739,45 @@ impl AppSettings {
                 "Auto-lock must be between 1 and 240 minutes.",
             ));
         }
-        if let Some(root) = &self.attachments_root
-            && !is_absolute_windows_path(root)
-        {
-            return Err(Error::validation(
-                "attachments_root",
-                "Use a full path such as \\\\server\\share\\PolarisCal or D:\\PolarisCal.",
-            ));
+        for (field, root) in [
+            ("attachments_root", &self.attachments_root),
+            ("photos_root", &self.photos_root),
+            ("service_manuals_root", &self.service_manuals_root),
+            ("documents_root", &self.documents_root),
+        ] {
+            if let Some(root) = root
+                && !is_absolute_windows_path(root)
+            {
+                return Err(Error::validation(
+                    field,
+                    "Use a full path such as \\\\server\\share\\PolarisCal or D:\\PolarisCal.",
+                ));
+            }
         }
         Ok(())
+    }
+
+    /// The folder set for `folder` itself, if any.
+    pub fn own_root(&self, folder: AttachmentFolder) -> Option<&str> {
+        match folder {
+            AttachmentFolder::Certificates => self.attachments_root.as_deref(),
+            AttachmentFolder::Photos => self.photos_root.as_deref(),
+            AttachmentFolder::ServiceManuals => self.service_manuals_root.as_deref(),
+            AttachmentFolder::Documents => self.documents_root.as_deref(),
+        }
+    }
+
+    /// Where files for `folder` are saved now: its own folder, or the certificates folder
+    /// when it has none. Returns which folder that is, and its path (if the certificates
+    /// folder is set at all).
+    pub fn save_to(&self, folder: AttachmentFolder) -> (AttachmentFolder, Option<&str>) {
+        match self.own_root(folder) {
+            Some(root) => (folder, Some(root)),
+            None => (
+                AttachmentFolder::Certificates,
+                self.attachments_root.as_deref(),
+            ),
+        }
     }
 }
 
@@ -721,6 +797,9 @@ impl Default for AppSettings {
         Self {
             idle_lock_minutes: Self::DEFAULT_IDLE_LOCK_MINUTES,
             attachments_root: None,
+            photos_root: None,
+            service_manuals_root: None,
+            documents_root: None,
             update_checks: true,
             currency_symbol: Self::DEFAULT_CURRENCY.into(),
             date_format: Self::DEFAULT_DATE_FORMAT.into(),

@@ -221,7 +221,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 17);
+    assert_eq!(info.schema_version, 18);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -1996,6 +1996,9 @@ async fn settings_are_validated_and_audited() {
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
                 password_policy: Default::default(),
+                photos_root: None,
+                service_manuals_root: None,
+                documents_root: None,
             },
         )
         .await;
@@ -2009,6 +2012,9 @@ async fn settings_are_validated_and_audited() {
             currency_symbol: "$".into(),
             date_format: "system".into(),
             password_policy: Default::default(),
+            photos_root: None,
+            service_manuals_root: None,
+            documents_root: None,
         },
     )
     .await
@@ -2057,6 +2063,7 @@ fn file(asset_id: i64, calibration_id: Option<i64>, path: &str) -> NewAttachment
         calibration_id,
         category: AttachmentCategory::Certificate,
         file_name: format!(" {} ", path.rsplit('/').next().unwrap()),
+        storage_folder: AttachmentFolder::Certificates,
         relative_path: path.into(),
         size_bytes: 1234,
         sha256: "a".repeat(64),
@@ -2198,6 +2205,106 @@ async fn archiving_attachments_is_audited() {
 }
 
 #[tokio::test]
+async fn service_manuals_are_shared_by_manufacturer_and_model() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let fluke = s
+        .create_lookup(&ctx(), LookupKind::Manufacturer, lookup("Fluke"))
+        .await
+        .unwrap()
+        .id;
+    let keysight = s
+        .create_lookup(&ctx(), LookupKind::Manufacturer, lookup("Keysight"))
+        .await
+        .unwrap()
+        .id;
+    let item = |tag: &'static str, maker: Option<i64>, model: Option<&'static str>| async move {
+        let mut i = asset_input(s, tag, AssetKind::Instrument).await;
+        i.manufacturer_id = maker;
+        i.model_number = model.map(Into::into);
+        s.create_asset(&ctx(), i).await.unwrap()
+    };
+    let a = item("DMM-A", Some(fluke), Some("87V")).await;
+    let b = item("DMM-B", Some(fluke), Some("87v")).await; // model compared ignoring case
+    let other_model = item("DMM-C", Some(fluke), Some("179")).await;
+    let other_maker = item("DMM-D", Some(keysight), Some("87V")).await;
+    let no_model = item("DMM-E", Some(fluke), None).await;
+
+    let mut manual = file(a.id, None, "manuals/DMM-A/87V manual.pdf");
+    manual.category = AttachmentCategory::ServiceManual;
+    manual.storage_folder = AttachmentFolder::ServiceManuals;
+    let manual = s.create_attachment(&ctx(), manual).await.unwrap();
+    assert_eq!(manual.storage_folder, AttachmentFolder::ServiceManuals);
+    // Another of A's files that isn't a manual stays with A.
+    let photo = s
+        .create_attachment(&ctx(), {
+            let mut f = file(a.id, None, "DMM-A/front.jpg");
+            f.category = AttachmentCategory::Photo;
+            f.sha256 = "b".repeat(64);
+            f
+        })
+        .await
+        .unwrap();
+
+    let files_of = |id: i64, shared: bool| async move {
+        let mut ids: Vec<i64> = s
+            .list_attachments(&AttachmentFilter {
+                asset_id: Some(id),
+                include_shared_manuals: shared,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(files_of(a.id, true).await, [manual.id, photo.id]);
+    assert_eq!(
+        files_of(b.id, true).await,
+        [manual.id],
+        "same maker and model"
+    );
+    assert!(files_of(b.id, false).await.is_empty(), "only when asked");
+    for unrelated in [other_model.id, other_maker.id, no_model.id] {
+        assert!(files_of(unrelated, true).await.is_empty());
+    }
+
+    // The same path may be used in two folders.
+    let mut same_path = file(b.id, None, "manuals/DMM-A/87V manual.pdf");
+    same_path.category = AttachmentCategory::Document;
+    same_path.storage_folder = AttachmentFolder::Documents;
+    assert!(s.create_attachment(&ctx(), same_path).await.is_ok());
+}
+
+#[test]
+fn files_go_to_their_types_folder_or_the_certificates_folder() {
+    let mut settings = AppSettings {
+        attachments_root: Some(r"\srv\cal\certs".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        settings.save_to(AttachmentCategory::Photo.folder()),
+        (AttachmentFolder::Certificates, Some(r"\srv\cal\certs"))
+    );
+    settings.photos_root = Some(r"\srv\cal\photos".into());
+    assert_eq!(
+        settings.save_to(AttachmentCategory::Photo.folder()),
+        (AttachmentFolder::Photos, Some(r"\srv\cal\photos"))
+    );
+    assert_eq!(
+        AttachmentCategory::Other.folder(),
+        AttachmentFolder::Documents
+    );
+    assert_eq!(
+        AttachmentCategory::ServiceManual.folder(),
+        AttachmentFolder::ServiceManuals
+    );
+}
+
+#[tokio::test]
 async fn attachments_need_an_active_item() {
     let h = harness().await;
     let s = h.store.as_ref();
@@ -2236,6 +2343,9 @@ async fn attachments_folder_setting_round_trips() {
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
                 password_policy: Default::default(),
+                photos_root: None,
+                service_manuals_root: None,
+                documents_root: None,
             },
         )
         .await
@@ -2256,6 +2366,9 @@ async fn attachments_folder_setting_round_trips() {
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
                 password_policy: Default::default(),
+                photos_root: None,
+                service_manuals_root: None,
+                documents_root: None,
             },
         )
         .await;
@@ -2271,6 +2384,9 @@ async fn attachments_folder_setting_round_trips() {
             currency_symbol: "$".into(),
             date_format: "system".into(),
             password_policy: Default::default(),
+            photos_root: None,
+            service_manuals_root: None,
+            documents_root: None,
         },
     )
     .await
@@ -2385,6 +2501,9 @@ async fn populate(store: &dyn Store) {
                 currency_symbol: "$".into(),
                 date_format: "system".into(),
                 password_policy: Default::default(),
+                photos_root: None,
+                service_manuals_root: None,
+                documents_root: None,
             },
         )
         .await

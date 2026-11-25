@@ -337,6 +337,11 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "password expiry",
         include_str!("../../migrations/mssql/0017_password_expiry.sql"),
     ),
+    (
+        18,
+        "attachment folders",
+        include_str!("../../migrations/mssql/0018_attachment_folders.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

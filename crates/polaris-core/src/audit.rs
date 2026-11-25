@@ -265,6 +265,7 @@ pub fn attachment_snapshot(a: &Attachment) -> Snapshot {
         ("File name", Some(a.file_name.clone())),
         ("Category", Some(a.category.to_string())),
         ("Calibration record", opt(&a.calibration_date)),
+        ("Folder", Some(a.storage_folder.to_string())),
         ("Stored as", Some(a.relative_path.clone())),
         ("Size (bytes)", Some(a.size_bytes.to_string())),
         ("SHA-256", Some(a.sha256.clone())),

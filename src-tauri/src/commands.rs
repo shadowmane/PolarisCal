@@ -16,8 +16,8 @@ use polaris_core::auth::{
 };
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentCategory, AttachmentFilter,
-    CalibrationFilter, CalibrationInput, CalibrationRecord, LastCost, LookupInput, LookupItem,
-    LookupKind, NewAttachment, StoreInfo,
+    AttachmentFolder, CalibrationFilter, CalibrationInput, CalibrationRecord, LastCost,
+    LookupInput, LookupItem, LookupKind, NewAttachment, StoreInfo,
 };
 use polaris_core::schedule::DueSummary;
 use polaris_core::{Error, FieldError, Id, Store};
@@ -520,10 +520,21 @@ pub async fn update_settings(
     // Check the format first (clear message), then whether this computer can write there.
     let mut settings = settings;
     settings.normalize()?;
-    if let Some(root) = settings.attachments_root.as_deref() {
-        check_folder(PathBuf::from(root))
-            .await
-            .map_err(|e| CommandError::from(Error::validation("attachments_root", e.message)))?;
+    // Only folders that changed, so an unreachable share doesn't block saving other settings.
+    let before = store.settings().await?;
+    for (field, folder) in [
+        ("attachments_root", AttachmentFolder::Certificates),
+        ("photos_root", AttachmentFolder::Photos),
+        ("service_manuals_root", AttachmentFolder::ServiceManuals),
+        ("documents_root", AttachmentFolder::Documents),
+    ] {
+        if let Some(root) = settings.own_root(folder)
+            && before.own_root(folder) != Some(root)
+        {
+            check_folder(PathBuf::from(root))
+                .await
+                .map_err(|e| CommandError::from(Error::validation(field, e.message)))?;
+        }
     }
     let saved = store.update_settings(&ctx(&me, None), settings).await?;
     state.set_idle_lock_minutes(saved.idle_lock_minutes);
@@ -754,18 +765,34 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
         .map_err(|e| CommandError::new(ErrorKind::Database, format!("background task failed: {e}")))
 }
 
-async fn attachments_root(store: &Arc<dyn Store>) -> CmdResult<PathBuf> {
-    store
-        .settings()
-        .await?
-        .attachments_root
+fn no_folder() -> CommandError {
+    CommandError::new(
+        ErrorKind::Config,
+        "An administrator needs to choose the attachments folder in Settings first.",
+    )
+}
+
+/// Where new files of this type are saved: their own folder, or the certificates folder
+/// if that isn't set. Also says which folder that is, to record with the file.
+async fn save_folder(
+    store: &Arc<dyn Store>,
+    category: AttachmentCategory,
+) -> CmdResult<(AttachmentFolder, PathBuf)> {
+    let settings = store.settings().await?;
+    let (folder, root) = settings.save_to(category.folder());
+    root.map(|r| (folder, PathBuf::from(r)))
+        .ok_or_else(no_folder)
+}
+
+/// Where a saved file's folder is now. If that folder's setting has since been cleared,
+/// the certificates folder is tried (where files go when it's unset).
+async fn stored_root(store: &Arc<dyn Store>, folder: AttachmentFolder) -> CmdResult<PathBuf> {
+    let settings = store.settings().await?;
+    settings
+        .own_root(folder)
+        .or(settings.attachments_root.as_deref())
         .map(PathBuf::from)
-        .ok_or_else(|| {
-            CommandError::new(
-                ErrorKind::Config,
-                "An administrator needs to choose the attachments folder in Settings first.",
-            )
-        })
+        .ok_or_else(no_folder)
 }
 
 async fn check_folder(root: PathBuf) -> CmdResult<()> {
@@ -794,7 +821,7 @@ pub async fn add_attachments(
     description: Option<String>,
 ) -> CmdResult<Vec<Attachment>> {
     let (store, me) = require(&state, Need::Editor).await?;
-    let root = attachments_root(&store).await?;
+    let (storage_folder, root) = save_folder(&store, category).await?;
     let asset = store.get_asset(asset_id).await?;
     if asset.is_archived {
         return Err(
@@ -827,6 +854,7 @@ pub async fn add_attachments(
             calibration_id,
             category,
             file_name: stored.file_name.clone(),
+            storage_folder,
             relative_path: stored.relative_path.clone(),
             size_bytes: stored.size_bytes,
             sha256: stored.sha256.clone(),
@@ -851,7 +879,7 @@ async fn verified_path(
     force: bool,
 ) -> CmdResult<(Attachment, PathBuf)> {
     let attachment = store.get_attachment(id).await?;
-    let root = attachments_root(store).await?;
+    let root = stored_root(store, attachment.storage_folder).await?;
     let path = files::resolve(&root, &attachment.relative_path)?;
     let check = path.clone();
     let hashed = blocking(move || files::hash_file(&check)).await?;
@@ -893,6 +921,53 @@ pub async fn open_attachment(
     app.opener()
         .open_path(path.to_string_lossy(), None::<&str>)
         .map_err(|e| CommandError::new(ErrorKind::Config, format!("Couldn't open the file: {e}")))
+}
+
+/// Image types the app's window can show.
+const SHOWABLE_IMAGES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/avif",
+];
+/// Larger photos aren't shown on the page (they can still be opened).
+const MAX_SHOWN_IMAGE_BYTES: i64 = 40 * 1024 * 1024;
+
+/// An attached photo's image, for showing on the item's page. Only image types the window
+/// can show, and only if the file is unchanged since it was attached.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn attachment_image(
+    state: State<'_, AppState>,
+    id: Id,
+) -> CmdResult<tauri::ipc::Response> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    let attachment = store.get_attachment(id).await?;
+    let showable = attachment
+        .content_type
+        .as_deref()
+        .is_some_and(|t| SHOWABLE_IMAGES.contains(&t));
+    if !showable {
+        return Err(
+            Error::validation("id", "This file isn't a picture PolarisCal can show.").into(),
+        );
+    }
+    if attachment.size_bytes > MAX_SHOWN_IMAGE_BYTES {
+        return Err(Error::validation(
+            "id",
+            "This picture is too large to show here; open it instead.",
+        )
+        .into());
+    }
+    let (_, path) = verified_path(&store, id, false).await?;
+    let bytes = blocking(move || std::fs::read(&path)).await?.map_err(|e| {
+        CommandError::new(
+            ErrorKind::Database,
+            format!("Couldn't read the picture: {e}"),
+        )
+    })?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Shows the file in File Explorer.

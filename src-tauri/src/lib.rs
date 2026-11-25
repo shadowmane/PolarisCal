@@ -70,6 +70,7 @@ pub fn run() {
             commands::add_attachments,
             commands::open_attachment,
             commands::reveal_attachment,
+            commands::attachment_image,
             commands::set_attachment_archived,
             commands::check_attachments_folder,
             connection::get_connection_settings,

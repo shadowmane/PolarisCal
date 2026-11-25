@@ -3,4 +3,4 @@
 /**
  * What an attached file is.
  */
-export type AttachmentCategory = "certificate" | "document" | "photo" | "other";
+export type AttachmentCategory = "certificate" | "document" | "photo" | "service_manual" | "other";

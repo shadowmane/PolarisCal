@@ -169,7 +169,7 @@ export const api = {
   // Attachments
   listAttachments: (filter: Partial<AttachmentFilter> = {}) =>
     call<Attachment[]>("list_attachments", {
-      filter: { asset_id: null, calibration_id: null, include_archived: false, ...filter },
+      filter: { asset_id: null, calibration_id: null, include_archived: false, include_shared_manuals: false, ...filter },
     }),
   addAttachments: (args: {
     assetId: number;
@@ -187,6 +187,8 @@ export const api = {
     }),
   openAttachment: (id: number, force = false) => call<void>("open_attachment", { id, force }),
   revealAttachment: (id: number) => call<void>("reveal_attachment", { id }),
+  /** An attached photo's image bytes, for showing it on the page. */
+  attachmentImage: (id: number) => call<ArrayBuffer>("attachment_image", { id }),
   setAttachmentArchived: (id: number, expectedVersion: number, archived: boolean, reason: string) =>
     call<Attachment>("set_attachment_archived", { id, expected_version: expectedVersion, archived, reason }),
   checkAttachmentsFolder: (path: string) => call<void>("check_attachments_folder", { path }),

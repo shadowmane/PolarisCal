@@ -1,6 +1,6 @@
 import { Alert, Button, Card, Chip, Spinner } from "@heroui/react";
-import { Lock } from "lucide-react";
-import type { ReactNode } from "react";
+import { ChevronDown, Lock } from "lucide-react";
+import { type ReactNode, useId, useState } from "react";
 import type { ApiError } from "../lib/api";
 import { useCurrencySymbol } from "../lib/currency";
 import { formatCents } from "../lib/format";
@@ -22,6 +22,75 @@ export function PageHeader({
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </header>
+  );
+}
+
+function readOpen(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : v === "open";
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * A card whose contents can be hidden: the whole header toggles it. Whether it was last
+ * left open is remembered under `rememberAs`, for every item. The contents are only
+ * rendered (and so only load their data) while open.
+ */
+export function CollapsibleCard({
+  title,
+  description,
+  rememberAs,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  description?: ReactNode;
+  /** A short name for remembering the choice, e.g. "asset-files". */
+  rememberAs: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const key = `polariscal.section.${rememberAs}`;
+  const [open, setOpen] = useState(() => readOpen(key, defaultOpen));
+  const contentId = useId();
+  function toggle() {
+    setOpen((was) => {
+      try {
+        localStorage.setItem(key, was ? "closed" : "open");
+      } catch {
+        // Not remembered, but still toggles.
+      }
+      return !was;
+    });
+  }
+  return (
+    <Card>
+      <Card.Header className="p-0">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={contentId}
+          onClick={toggle}
+          className="-m-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded-xl p-1 text-left outline-none hover:bg-default/50 focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <div className="min-w-0 flex-1">
+            <Card.Title>{title}</Card.Title>
+            {description && <Card.Description>{description}</Card.Description>}
+          </div>
+          <span className="mt-0.5 flex shrink-0 items-center gap-1 text-xs text-muted">
+            {open ? "Hide" : "Show"}
+            <ChevronDown
+              aria-hidden
+              className={`size-4 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+            />
+          </span>
+        </button>
+      </Card.Header>
+      {open && <Card.Content id={contentId}>{children}</Card.Content>}
+    </Card>
   );
 }
 

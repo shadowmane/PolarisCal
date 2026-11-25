@@ -1224,7 +1224,8 @@ fn certificate_snapshot(c: &Certificate) -> Snapshot {
 macro_rules! attachment_select {
     () => {
         "SELECT f.id, f.asset_id, a.asset_tag, f.calibration_id, r.cal_date AS calibration_date,
-                f.category, f.file_name, f.relative_path, f.size_bytes, f.sha256, f.content_type,
+                f.category, f.file_name, f.storage_folder, f.relative_path, f.size_bytes, f.sha256,
+                f.content_type,
                 f.description, f.uploaded_by, f.is_archived, f.row_version, f.created_at
          FROM attachments f
          JOIN assets a                    ON a.id = f.asset_id
@@ -1241,6 +1242,7 @@ fn map_attachment(row: &Row) -> Result<Attachment> {
         calibration_date: row.get("calibration_date")?,
         category: row.get::<String>("category")?.parse()?,
         file_name: row.get("file_name")?,
+        storage_folder: row.get::<String>("storage_folder")?.parse()?,
         relative_path: row.get("relative_path")?,
         size_bytes: row.get("size_bytes")?,
         sha256: row.get("sha256")?,
@@ -1637,6 +1639,9 @@ impl Store for SqlStore {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(AppSettings::DEFAULT_IDLE_LOCK_MINUTES),
             attachments_root: value("attachments_root").filter(|v| !v.is_empty()),
+            photos_root: value("photos_root").filter(|v| !v.is_empty()),
+            service_manuals_root: value("service_manuals_root").filter(|v| !v.is_empty()),
+            documents_root: value("documents_root").filter(|v| !v.is_empty()),
             update_checks: value("update_checks").is_none_or(|v| v != "false"),
             currency_symbol: value("currency_symbol")
                 .filter(|v| !v.is_empty())
@@ -1677,6 +1682,18 @@ impl Store for SqlStore {
             (
                 "attachments_root",
                 settings.attachments_root.clone().unwrap_or_default(),
+            ),
+            (
+                "photos_root",
+                settings.photos_root.clone().unwrap_or_default(),
+            ),
+            (
+                "service_manuals_root",
+                settings.service_manuals_root.clone().unwrap_or_default(),
+            ),
+            (
+                "documents_root",
+                settings.documents_root.clone().unwrap_or_default(),
             ),
             ("update_checks", settings.update_checks.to_string()),
             ("currency_symbol", settings.currency_symbol.clone()),
@@ -1729,12 +1746,31 @@ impl Store for SqlStore {
                 new: Some(settings.idle_lock_minutes.to_string()),
             });
         }
-        if before.attachments_root != settings.attachments_root {
-            changes.push(FieldChange {
-                field: "Attachments folder".into(),
-                old: before.attachments_root.clone(),
-                new: settings.attachments_root.clone(),
-            });
+        for (field, old, new) in [
+            (
+                "Calibration certificates folder",
+                &before.attachments_root,
+                &settings.attachments_root,
+            ),
+            ("Photos folder", &before.photos_root, &settings.photos_root),
+            (
+                "Service manuals folder",
+                &before.service_manuals_root,
+                &settings.service_manuals_root,
+            ),
+            (
+                "Other documents folder",
+                &before.documents_root,
+                &settings.documents_root,
+            ),
+        ] {
+            if old != new {
+                changes.push(FieldChange {
+                    field: field.into(),
+                    old: old.clone(),
+                    new: new.clone(),
+                });
+            }
         }
         if before.currency_symbol != settings.currency_symbol {
             changes.push(FieldChange {
@@ -2351,7 +2387,16 @@ impl Store for SqlStore {
     async fn list_attachments(&self, filter: &AttachmentFilter) -> Result<Vec<Attachment>> {
         const SQL: &str = concat!(
             attachment_select!(),
-            " WHERE (?1 IS NULL OR f.asset_id = ?1)
+            " WHERE (?1 IS NULL
+                     OR f.asset_id = ?1
+                     -- Service manuals from other items of the same manufacturer and model.
+                     OR (?4 = TRUE AND ?2 IS NULL AND f.category = 'service_manual'
+                         AND f.asset_id IN (
+                             SELECT o.id FROM assets o JOIN assets t ON t.id = ?1
+                              WHERE o.id <> t.id
+                                AND t.manufacturer_id IS NOT NULL AND t.model_number IS NOT NULL
+                                AND o.manufacturer_id = t.manufacturer_id
+                                AND LOWER(o.model_number) = LOWER(t.model_number))))
                 AND (?2 IS NULL OR f.calibration_id = ?2)
                 AND (?3 = TRUE OR f.is_archived = FALSE)
               ORDER BY f.created_at DESC, f.id DESC"
@@ -2363,7 +2408,8 @@ impl Store for SqlStore {
                 params![
                     filter.asset_id,
                     filter.calibration_id,
-                    filter.include_archived
+                    filter.include_archived,
+                    filter.include_shared_manuals
                 ],
             )
             .await?
@@ -2460,8 +2506,9 @@ impl Store for SqlStore {
             .insert(
                 "INSERT INTO attachments (asset_id, calibration_id, category, file_name, relative_path,
                                           size_bytes, sha256, content_type, description,
-                                          uploaded_by_id, uploaded_by, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                                          uploaded_by_id, uploaded_by, created_at, updated_at,
+                                          storage_folder)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13)",
                 params![
                     input.asset_id,
                     input.calibration_id,
@@ -2474,7 +2521,8 @@ impl Store for SqlStore {
                     &input.description,
                     ctx.actor.user_id,
                     &ctx.actor.username,
-                    now()
+                    now(),
+                    input.storage_folder.as_str()
                 ],
             )
             .await

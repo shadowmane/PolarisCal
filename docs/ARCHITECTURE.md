@@ -128,16 +128,24 @@ All of these live in `polaris-core` so every backend applies them identically.
 
 ## Attachments
 
-* An administrator sets the **attachments folder** in Settings, ideally a network share such as
-  `\\server\share\PolarisCal` that every user reaches by the same path. Saving it checks that this
-  computer can write there. Until it is set, attaching is unavailable.
-* Attaching **copies** the chosen file into the folder:
+* An administrator sets the **attachments folders** in Settings, ideally network shares such as
+  `\\server\share\PolarisCal` that every user reaches by the same path: one for calibration
+  certificates (`attachments_root`, required before anything can be attached) and optional ones for
+  photos, service manuals, and other documents (documents and files of type Other). A type without
+  its own folder is saved in the certificates folder. Saving checks that this computer can write to
+  each folder that changed.
+* Each file records the folder it was saved in (`attachments.storage_folder`, schema 18; files from
+  before then are in the certificates folder), so changing a folder later only affects new files.
+* **Service manuals** attached to one item are listed on every item with the same manufacturer and
+  model number (model compared ignoring case), marked "Shared from" the item they're attached to,
+  where they're archived or restored.
+* Attaching **copies** the chosen file into its type's folder:
   * `<ASSET-TAG>/<file>` for files on an Instrument or System;
   * `<ASSET-TAG>/<YYYY-MM-DD>/<file>` for files on a calibration record (the calibration date).
 
   Names are made safe for Windows, and a name that's already taken gets " (2)", " (3)", and so on.
   The database stores the path *relative to the folder*, so the share can move as long as the
-  structure under it is kept.
+  structure under it is kept. Paths are unique within each folder.
 * Each file's **SHA-256 fingerprint** and size are recorded. Opening a file re-checks the
   fingerprint: a changed file triggers a warning before it opens, and a missing file is reported with
   where it was expected. The same file can't be attached twice to the same item or record.
@@ -156,7 +164,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 17) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 18) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |

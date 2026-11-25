@@ -443,35 +443,65 @@ function DateFormatCard({ settings, onSaved }: { settings?: AppSettings; onSaved
 
 const EXAMPLE_SHARE = String.raw`\\server\share\PolarisCal`;
 
+type FolderKey = "attachments_root" | "photos_root" | "service_manuals_root" | "documents_root";
+
+const ATTACHMENT_FOLDERS: { key: FolderKey; label: string; hint: string }[] = [
+  {
+    key: "attachments_root",
+    label: "Calibration certificates",
+    hint: "Required before files can be attached. Any type below that's left empty is saved here too.",
+  },
+  { key: "photos_root", label: "Photos", hint: "" },
+  { key: "service_manuals_root", label: "Service manuals", hint: "" },
+  { key: "documents_root", label: "Other documents", hint: "Documents and files of type Other." },
+];
+
+const NO_FOLDERS: Record<FolderKey, string> = {
+  attachments_root: "",
+  photos_root: "",
+  service_manuals_root: "",
+  documents_root: "",
+};
+
 function AttachmentsFolderCard({ settings, onSaved }: { settings?: AppSettings; onSaved: () => void }) {
   const { can } = useAuth();
   const isAdmin = can("admin");
-  const [folder, setFolder] = useState("");
-  const [error, setError] = useState<string>();
-  const [busy, setBusy] = useState<"test" | "save" | null>(null);
-  useEffect(() => setFolder(settings?.attachments_root ?? ""), [settings]);
+  const [folders, setFolders] = useState<Record<FolderKey, string>>(NO_FOLDERS);
+  const [errors, setErrors] = useState<Partial<Record<FolderKey, string>>>({});
+  const [busy, setBusy] = useState<FolderKey | "save" | null>(null);
+  useEffect(() => {
+    if (!settings) return;
+    setFolders({
+      attachments_root: settings.attachments_root ?? "",
+      photos_root: settings.photos_root ?? "",
+      service_manuals_root: settings.service_manuals_root ?? "",
+      documents_root: settings.documents_root ?? "",
+    });
+  }, [settings]);
 
-  async function browse() {
+  const set = (key: FolderKey, value: string) => {
+    setFolders((f) => ({ ...f, [key]: value }));
+    setErrors((e) => ({ ...e, [key]: undefined }));
+  };
+
+  async function browse(key: FolderKey, label: string) {
     const picked = await openDialog({
       directory: true,
       multiple: false,
-      title: "Choose the attachments folder",
-      defaultPath: folder || undefined,
+      title: `Choose the folder for ${label.toLowerCase()}`,
+      defaultPath: folders[key] || folders.attachments_root || undefined,
     });
-    if (typeof picked === "string") {
-      setFolder(picked);
-      setError(undefined);
-    }
+    if (typeof picked === "string") set(key, picked);
   }
 
-  async function test() {
-    setBusy("test");
+  async function test(key: FolderKey) {
+    setBusy(key);
     try {
-      await api.checkAttachmentsFolder(folder);
-      setError(undefined);
+      await api.checkAttachmentsFolder(folders[key]);
+      setErrors((e) => ({ ...e, [key]: undefined }));
       toast.success("PolarisCal can write to this folder");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e));
+      setErrors((errs) => ({ ...errs, [key]: e instanceof ApiError ? e.message : String(e) }));
     } finally {
       setBusy(null);
     }
@@ -480,71 +510,104 @@ function AttachmentsFolderCard({ settings, onSaved }: { settings?: AppSettings; 
   async function save() {
     if (!settings) return;
     setBusy("save");
+    const value = (key: FolderKey) => folders[key].trim() || null;
     try {
-      await api.updateSettings({ ...settings, attachments_root: folder.trim() || null });
-      setError(undefined);
-      toast.success(folder.trim() ? "Attachments folder saved" : "Attachments folder cleared");
+      await api.updateSettings({
+        ...settings,
+        attachments_root: value("attachments_root"),
+        photos_root: value("photos_root"),
+        service_manuals_root: value("service_manuals_root"),
+        documents_root: value("documents_root"),
+      });
+      setErrors({});
+      toast.success("Attachments folders saved");
       onSaved();
     } catch (e) {
-      const fields = fieldErrors(e);
-      setError(fields.attachments_root ?? (e instanceof ApiError ? e.message : String(e)));
+      const fields = fieldErrors(e) as Partial<Record<FolderKey, string>>;
+      if (Object.keys(fields).length) setErrors(fields);
+      else toast.danger(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(null);
     }
   }
 
+  const certificates = folders.attachments_root.trim();
   return (
     <Card>
       <Card.Header>
-        <LockableTitle locked={!isAdmin}>Attachments folder</LockableTitle>
+        <LockableTitle locked={!isAdmin}>Attachments folders</LockableTitle>
         <Card.Description>
-          Certificates and other files are copied here, in a folder per item. Use a network share (for example
+          Files are copied into these folders, in a folder per item, by type. Use network shares (for example
           {EXAMPLE_SHARE}) that everyone using PolarisCal can reach with the same path.
         </Card.Description>
       </Card.Header>
       <Card.Content>
         {isAdmin ? (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-start gap-2">
-              <TextInput
-                label="Folder"
-                value={folder}
-                onChange={(v) => {
-                  setFolder(v);
-                  setError(undefined);
-                }}
-                error={error}
-                placeholder={EXAMPLE_SHARE}
-                className="flex-1"
-              />
-              <Button className="mt-6" variant="secondary" onPress={() => void browse()}>
-                <FolderOpen className="size-4" /> Browse
-              </Button>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="tertiary"
-                isDisabled={!folder.trim()}
-                isPending={busy === "test"}
-                onPress={() => void test()}
-              >
-                Test access
-              </Button>
+          <div className="flex flex-col gap-4">
+            {ATTACHMENT_FOLDERS.map(({ key, label, hint }) => {
+              const main = key === "attachments_root";
+              return (
+                <div key={key} className="flex flex-col gap-1">
+                  <div className="flex items-start gap-2">
+                    <TextInput
+                      label={label}
+                      value={folders[key]}
+                      onChange={(v) => set(key, v)}
+                      error={errors[key]}
+                      placeholder={main ? EXAMPLE_SHARE : certificates ? "Same as calibration certificates" : ""}
+                      description={hint || undefined}
+                      className="flex-1"
+                    />
+                    <Button
+                      className="mt-6"
+                      variant="secondary"
+                      aria-label={`Browse for the ${label.toLowerCase()} folder`}
+                      onPress={() => void browse(key, label)}
+                    >
+                      <FolderOpen className="size-4" /> Browse
+                    </Button>
+                    <Button
+                      className="mt-6"
+                      variant="tertiary"
+                      aria-label={`Test access to the ${label.toLowerCase()} folder`}
+                      isDisabled={!folders[key].trim()}
+                      isPending={busy === key}
+                      onPress={() => void test(key)}
+                    >
+                      Test
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            <div>
               <Button isPending={busy === "save"} onPress={() => void save()}>
                 Save
               </Button>
             </div>
             <p className="text-xs text-muted">
-              Changing the folder doesn't move existing files. Copy them to the new location yourself, keeping
-              the same folder structure.
+              Changing a folder applies to files attached from then on; it doesn't move existing files. To move them,
+              copy them to the new location yourself, keeping the same folder structure.
             </p>
           </div>
         ) : (
-          <p className="text-sm break-all">
-            {settings?.attachments_root ?? (
-              <span className="text-muted">Not set. An administrator needs to choose a folder before files can be attached.</span>
-            )}
-          </p>
+          <dl className="flex flex-col gap-2 text-sm">
+            {ATTACHMENT_FOLDERS.map(({ key, label }) => (
+              <div key={key}>
+                <dt className="text-xs text-muted">{label}</dt>
+                <dd className="break-all">
+                  {settings?.[key] ??
+                    (key === "attachments_root" ? (
+                      <span className="text-muted">
+                        Not set. An administrator needs to choose a folder before files can be attached.
+                      </span>
+                    ) : (
+                      <span className="text-muted">Same as calibration certificates</span>
+                    ))}
+                </dd>
+              </div>
+            ))}
+          </dl>
         )}
       </Card.Content>
     </Card>
@@ -561,6 +624,20 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 const SETTINGS_TABS = ["appearance", "certificate", "administration"] as const;
+
+/**
+ * Side by side when the page has room for both (e.g. the window maximized), stacked
+ * otherwise, `left` first. Goes by the page's own width, not the window's, so the sidebar
+ * is accounted for. Needs an `@container` around it.
+ */
+function SettingsColumns({ left, right }: { left: ReactNode; right: ReactNode }) {
+  return (
+    <div className="grid max-w-5xl grid-cols-1 items-start gap-6 @6xl:max-w-[110rem] @6xl:grid-cols-2">
+      <div className="flex min-w-0 flex-col gap-6">{left}</div>
+      <div className="flex min-w-0 flex-col gap-6">{right}</div>
+    </div>
+  );
+}
 
 export function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.appInfo(), []);
@@ -603,9 +680,11 @@ export function SettingsPage() {
       </div>
 
       {/* The certificate template has a preview beside it, so it gets the full width. */}
-      <div className={tab === "certificate" ? "" : "flex max-w-5xl flex-col gap-6"}>
+      <div className={tab === "certificate" ? "" : "@container"}>
         {tab === "appearance" && (
-          <>
+          <SettingsColumns
+            left={
+              <>
             <Card>
               <Card.Header>
                 <Card.Title>Appearance</Card.Title>
@@ -634,14 +713,18 @@ export function SettingsPage() {
               </Card.Content>
             </Card>
             <CurrencyCard settings={settings.data} onSaved={settings.reload} />
-            <DateFormatCard settings={settings.data} onSaved={settings.reload} />
-          </>
+              </>
+            }
+            right={<DateFormatCard settings={settings.data} onSaved={settings.reload} />}
+          />
         )}
 
         {tab === "certificate" && <CertificateTemplateSettings />}
 
         {tab === "administration" && (
-          <>
+          <SettingsColumns
+            left={
+              <>
             {data && (
               <Card>
                 <Card.Header>
@@ -707,11 +790,17 @@ export function SettingsPage() {
                 </Card.Footer>
               </Card>
             )}
-            <SecurityCard settings={settings.data} onSaved={settings.reload} />
-            <PasswordRulesCard settings={settings.data} onSaved={settings.reload} />
             <AttachmentsFolderCard settings={settings.data} onSaved={settings.reload} />
-            <UpdatesCard version={data?.version} settings={settings.data} onSaved={settings.reload} />
-          </>
+              </>
+            }
+            right={
+              <>
+                <SecurityCard settings={settings.data} onSaved={settings.reload} />
+                <PasswordRulesCard settings={settings.data} onSaved={settings.reload} />
+                <UpdatesCard version={data?.version} settings={settings.data} onSaved={settings.reload} />
+              </>
+            }
+          />
         )}
 
         <ConnectionDialog
