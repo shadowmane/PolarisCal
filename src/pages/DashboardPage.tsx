@@ -23,6 +23,7 @@ import {
 import { api } from "../lib/api";
 import { dueStatusMeta, EMPTY, formatDate } from "../lib/format";
 import { useAsync } from "../lib/useAsync";
+import { WaitingForYou } from "../components/WaitingForYou";
 
 /** One dashboard box: what it counts, how it looks, and what its filtered list says when empty. */
 type Stat = {
@@ -294,6 +295,8 @@ export function DashboardPage() {
               }
             />
           </section>
+
+          <WaitingForYou />
         </div>
       )}
     </>

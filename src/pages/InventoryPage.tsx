@@ -495,6 +495,10 @@ function OwnerDialog({
   );
 }
 
+function waitingAll(list: OwnerRequest[] | undefined): OwnerRequest[] {
+  return (list ?? []).filter((r) => r.status === "pending");
+}
+
 const OUTCOME: Record<OwnerRequestStatus, { label: string; color: "default" | "success" | "danger" | "warning" }> = {
   pending: { label: "Waiting", color: "warning" },
   approved: { label: "Approved", color: "success" },
@@ -515,7 +519,10 @@ function RequestsView({
   onChanged: () => void;
 }) {
   const { can, user } = useAuth();
-  const canDecide = can("edit_records");
+  const editor = can("edit_records");
+  // Addressed to you (the holder), or for a Technician or Administrator.
+  const decides = (r: OwnerRequest) => editor || r.approver_user_id === user.id;
+  const canDecide = editor || waitingAll(requests.data).some((r) => r.approver_user_id === user.id);
   const [deciding, setDeciding] = useState<{ request: OwnerRequest; approve: boolean } | null>(null);
   const [cancelling, setCancelling] = useState<OwnerRequest | null>(null);
   const all = requests.data ?? [];
@@ -538,6 +545,7 @@ function RequestsView({
                 <Table.Column>With now</Table.Column>
                 <Table.Column>Requested by</Table.Column>
                 <Table.Column>Note</Table.Column>
+                <Table.Column>Decided by</Table.Column>
                 <Table.Column>
                   <span className="sr-only">Actions</span>
                 </Table.Column>
@@ -570,8 +578,15 @@ function RequestsView({
                       </Table.Cell>
                       <Table.Cell className="max-w-64 whitespace-normal">{r.note ?? EMPTY}</Table.Cell>
                       <Table.Cell>
+                        {r.approver_user_id === user.id ? (
+                          <span className="font-medium">You</span>
+                        ) : (
+                          (r.approver_name ?? <span className="text-muted">A Technician or Administrator</span>)
+                        )}
+                      </Table.Cell>
+                      <Table.Cell>
                         <div className="flex justify-end gap-2">
-                          {canDecide && (
+                          {decides(r) && (
                             <>
                               <Button size="sm" onPress={() => setDeciding({ request: r, approve: true })}>
                                 <Check className="size-4" /> Approve
@@ -585,7 +600,7 @@ function RequestsView({
                               </Button>
                             </>
                           )}
-                          {mine && !canDecide && (
+                          {mine && !decides(r) && (
                             <Button size="sm" variant="secondary" onPress={() => setCancelling(r)}>
                               Cancel request
                             </Button>

@@ -30,4 +30,8 @@ is_repair: boolean | null,
 /**
  * Statuses only: set on the built-in statuses, which can't be deleted.
  */
-status_role: StatusRole | null, };
+status_role: StatusRole | null, 
+/**
+ * Owners only: the user account linked to this Owner entry.
+ */
+user_id: number | null, user_name: string | null, };

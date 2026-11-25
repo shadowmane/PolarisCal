@@ -1,5 +1,5 @@
 import { Button, Table, Tabs } from "@heroui/react";
-import { ListChecks, Plus } from "lucide-react";
+import { ListChecks, Plus, UserRound } from "lucide-react";
 import { useState } from "react";
 import type { LookupItem } from "../bindings/LookupItem";
 import type { LookupKind } from "../bindings/LookupKind";
@@ -77,7 +77,13 @@ function LookupTable({ kind }: { kind: LookupKind }) {
                     id={item.id}
                     className={`${isAdmin ? "cursor-pointer" : ""} ${item.is_active ? "" : "opacity-55"}`}
                   >
-                    <Table.Cell className="font-medium">{item.name}</Table.Cell>
+                    <Table.Cell className="font-medium">
+                      <span className="flex items-center gap-1.5">
+                        {item.user_id != null && <UserRound className="size-3.5 text-accent" aria-label="User account" />}
+                        {item.name}
+                      </span>
+                      {item.user_name && <div className="text-xs font-normal text-muted">Linked to {item.user_name}</div>}
+                    </Table.Cell>
                     <Table.Cell>{item.description ?? EMPTY}</Table.Cell>
                     {kind === "provider" && (
                       <Table.Cell>{item.is_internal ? "Internal" : "Outside vendor"}</Table.Cell>

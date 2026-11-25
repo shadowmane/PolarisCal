@@ -22,7 +22,8 @@ use polaris_core::model::{
     AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationFilter, CalibrationInput,
     CalibrationRecord, ConditionReturned, LastCost, LookupInput, LookupItem, LookupKind,
     NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, OwnerRequestKind,
-    OwnerRequestStatus, Role, StatusRole, StoreInfo,
+    OwnerRequestStatus, Reservation, ReservationCheck, ReservationFilter, ReservationStatus, Role,
+    StatusRole, StoreInfo,
 };
 use polaris_core::schedule::{
     add_interval, apply_extension, derive_dates, due_status_with_extension,
@@ -750,11 +751,20 @@ fn lookup_select(kind: LookupKind) -> String {
     } else {
         "NULL"
     };
+    let (user, user_name) = if kind == LookupKind::Owner {
+        (
+            "user_id",
+            "(SELECT lu.display_name FROM users lu WHERE lu.id = owners.user_id)",
+        )
+    } else {
+        ("NULL", "NULL")
+    };
     format!(
         "SELECT id, name, description, is_active, sort_order,
                 {internal} AS is_internal, {tracks} AS tracks_due,
                 {counts} AS counts_as_calibration, {extension} AS is_extension,
-                {repair} AS is_repair, {role} AS status_role
+                {repair} AS is_repair, {role} AS status_role,
+                {user} AS user_id, {user_name} AS user_name
          FROM {table}"
     )
 }
@@ -773,6 +783,8 @@ fn map_lookup(row: &Row, kind: LookupKind) -> Result<LookupItem> {
         is_extension: row.get("is_extension")?,
         is_repair: row.get("is_repair")?,
         status_role: role_from(row)?,
+        user_id: row.get("user_id")?,
+        user_name: row.get("user_name")?,
     })
 }
 
@@ -902,7 +914,9 @@ async fn fetch_lookup(conn: &mut Conn, kind: LookupKind, id: Id) -> Result<Looku
 const USER_COLUMNS: &str =
     "id, username, display_name, email, role, is_active, must_change_password,
                             last_sign_in_at, password_changed_at, reset_requested_at, row_version,
-                            created_at, updated_at";
+                            created_at, updated_at,
+                            (SELECT lo.id FROM owners lo WHERE lo.user_id = users.id) AS owner_id,
+                            (SELECT lo.name FROM owners lo WHERE lo.user_id = users.id) AS owner_name";
 
 fn map_user(row: &Row) -> Result<User> {
     Ok(User {
@@ -916,6 +930,8 @@ fn map_user(row: &Row) -> Result<User> {
         last_sign_in_at: row.get("last_sign_in_at")?,
         password_changed_at: row.get("password_changed_at")?,
         reset_requested_at: row.get("reset_requested_at")?,
+        owner_id: row.get("owner_id")?,
+        owner_name: row.get("owner_name")?,
         row_version: row.get("row_version")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
@@ -1343,11 +1359,12 @@ macro_rules! owner_request_select {
         "SELECT r.id, r.asset_id, a.asset_tag, a.description AS asset_description, r.kind,
                 r.owner_id, o.name AS owner_name, co.name AS current_owner_name,
                 r.requested_by_id, r.requested_by, r.note, r.status, r.decided_by, r.decided_at,
-                r.decision_note, r.created_at
+                r.decision_note, r.created_at, r.approver_user_id, au.display_name AS approver_name
          FROM owner_requests r
          JOIN assets a       ON a.id = r.asset_id
          JOIN owners o       ON o.id = r.owner_id
-         LEFT JOIN owners co ON co.id = a.owner_id"
+         LEFT JOIN owners co ON co.id = a.owner_id
+         LEFT JOIN users au  ON au.id = r.approver_user_id"
     };
 }
 
@@ -1369,6 +1386,8 @@ fn map_owner_request(row: &Row) -> Result<OwnerRequest> {
         decided_at: row.get("decided_at")?,
         decision_note: row.get("decision_note")?,
         created_at: row.get("created_at")?,
+        approver_user_id: row.get("approver_user_id")?,
+        approver_name: row.get("approver_name")?,
     })
 }
 
@@ -1418,6 +1437,188 @@ async fn close_owner_request(
     )
     .await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Reservations
+// ---------------------------------------------------------------------------
+
+macro_rules! reservation_select {
+    () => {
+        "SELECT r.id, r.asset_id, a.asset_tag, a.description AS asset_description,
+                a.owner_id AS asset_owner_id, ao.name AS asset_owner_name,
+                r.user_id, u.display_name AS user_name,
+                (SELECT uo.id FROM owners uo WHERE uo.user_id = r.user_id) AS user_owner_id,
+                r.start_date, r.end_date, r.note, r.status, r.asks_reservation_id,
+                b.user_id AS asks_user_id, bu.display_name AS asks_user_name,
+                r.decided_by, r.decided_at, r.decision_note, r.created_at
+         FROM reservations r
+         JOIN assets a          ON a.id = r.asset_id
+         JOIN users u           ON u.id = r.user_id
+         LEFT JOIN owners ao    ON ao.id = a.owner_id
+         LEFT JOIN reservations b ON b.id = r.asks_reservation_id
+         LEFT JOIN users bu     ON bu.id = b.user_id"
+    };
+}
+
+fn map_reservation(row: &Row) -> Result<Reservation> {
+    Ok(Reservation {
+        id: row.get("id")?,
+        asset_id: row.get("asset_id")?,
+        asset_tag: row.get("asset_tag")?,
+        asset_description: row.get("asset_description")?,
+        asset_owner_id: row.get("asset_owner_id")?,
+        asset_owner_name: row.get("asset_owner_name")?,
+        user_id: row.get("user_id")?,
+        user_name: row.get("user_name")?,
+        user_owner_id: row.get("user_owner_id")?,
+        start_date: row.get("start_date")?,
+        end_date: row.get("end_date")?,
+        note: row.get("note")?,
+        status: row.get::<String>("status")?.parse()?,
+        asks_reservation_id: row.get("asks_reservation_id")?,
+        asks_user_id: row.get("asks_user_id")?,
+        asks_user_name: row.get("asks_user_name")?,
+        decided_by: row.get("decided_by")?,
+        decided_at: row.get("decided_at")?,
+        decision_note: row.get("decision_note")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
+async fn fetch_reservation(conn: &mut Conn, id: Id) -> Result<Reservation> {
+    const SQL: &str = concat!(reservation_select!(), " WHERE r.id = ?1");
+    let row = conn
+        .fetch_optional(SQL, params![id])
+        .await?
+        .ok_or(Error::NotFound {
+            entity: "reservation",
+            id,
+        })?;
+    map_reservation(&row)
+}
+
+/// Booked and waiting reservations of an item overlapping `start`..`end`.
+async fn overlapping_reservations(
+    conn: &mut Conn,
+    asset_id: Id,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<Reservation>> {
+    const SQL: &str = concat!(
+        reservation_select!(),
+        " WHERE r.asset_id = ?1 AND r.status IN ('active', 'pending')
+            AND r.start_date <= ?3 AND r.end_date >= ?2
+          ORDER BY r.start_date, r.id"
+    );
+    conn.fetch_all(SQL, params![asset_id, start, end])
+        .await?
+        .iter()
+        .map(map_reservation)
+        .collect()
+}
+
+fn reservation_span(start: NaiveDate, end: NaiveDate) -> String {
+    if start == end {
+        start.format("%Y-%m-%d").to_string()
+    } else {
+        format!("{} to {}", start.format("%Y-%m-%d"), end.format("%Y-%m-%d"))
+    }
+}
+
+/// What's in the way of reserving `asset` for `start`..`end`.
+async fn reservation_check(
+    conn: &mut Conn,
+    asset: &Asset,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<ReservationCheck> {
+    if end < start {
+        return Err(Error::validation(
+            "end_date",
+            "The reservation must end on or after the day it starts.",
+        ));
+    }
+    let conflicts = overlapping_reservations(conn, asset.id, start, end).await?;
+    let can_ask = match conflicts.as_slice() {
+        [only] if only.status == ReservationStatus::Active && only.start_date < start => {
+            Some(only.clone())
+        }
+        _ => None,
+    };
+    // The first start, on or after the one asked for, when the same number of days is free.
+    let days = (end - start).num_days();
+    let mut next_free_start = None;
+    let mut candidate = start;
+    for _ in 0..100 {
+        let clash = overlapping_reservations(
+            conn,
+            asset.id,
+            candidate,
+            candidate + chrono::Duration::days(days),
+        )
+        .await?;
+        match clash.iter().map(|r| r.end_date).max() {
+            None => {
+                next_free_start = Some(candidate);
+                break;
+            }
+            Some(last) => candidate = last + chrono::Duration::days(1),
+        }
+    }
+    Ok(ReservationCheck {
+        checked_out_to: asset.owner_id.and(asset.owner_name.clone()),
+        conflicts,
+        can_ask,
+        next_free_start,
+    })
+}
+
+fn check_reservable(asset: &Asset) -> Result<()> {
+    let tag = &asset.asset_tag;
+    if asset.kind == AssetKind::System {
+        return Err(Error::validation(
+            "asset_id",
+            format!("{tag} is a System. Reserve its Instruments instead."),
+        ));
+    }
+    if asset.is_archived {
+        return Err(Error::validation("asset_id", format!("{tag} is archived.")));
+    }
+    if asset.status_role == Some(StatusRole::Retired) {
+        return Err(Error::validation("asset_id", format!("{tag} is retired.")));
+    }
+    Ok(())
+}
+
+async fn reservation_audit(
+    conn: &mut Conn,
+    ctx: &WriteContext,
+    action: AuditAction,
+    r: &Reservation,
+    old: Option<String>,
+    new: Option<String>,
+) -> Result<()> {
+    write_audit(
+        conn,
+        NewAuditEntry::by(ctx, action, AuditEntity::Asset)
+            .subject(r.asset_id, &r.asset_tag)
+            .asset(r.asset_id)
+            .changes(vec![FieldChange {
+                field: "Reservation".into(),
+                old,
+                new,
+            }]),
+    )
+    .await
+}
+
+fn reservation_label(r: &Reservation) -> String {
+    format!(
+        "{} for {}",
+        reservation_span(r.start_date, r.end_date),
+        r.user_name
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2563,11 +2764,29 @@ impl Store for SqlStore {
                     asset.asset_tag
                 )));
             }
+            // A transfer is the holder's to agree to when their Owner entry is a user;
+            // otherwise (a check-out, or a group owner) a Technician or Administrator decides.
+            let approver: Option<Id> = match (kind, asset.owner_id) {
+                (OwnerRequestKind::Transfer, Some(holder)) => tx
+                    .fetch_optional("SELECT user_id FROM owners WHERE id = ?1", params![holder])
+                    .await?
+                    .map(|r| r.get::<Option<Id>>("user_id"))
+                    .transpose()?
+                    .flatten(),
+                _ => None,
+            };
+            if approver == Some(ctx.actor.user_id) {
+                return Err(Error::validation(
+                    "asset_ids",
+                    format!("{} is already checked out to you.", asset.asset_tag),
+                ));
+            }
             let request_id = tx
                 .insert(
                     "INSERT INTO owner_requests (asset_id, kind, owner_id, requested_by_id,
-                                                 requested_by, note, status, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
+                                                 requested_by, note, status, created_at, updated_at,
+                                                 approver_user_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7, ?8)",
                     params![
                         id,
                         kind.as_str(),
@@ -2575,7 +2794,8 @@ impl Store for SqlStore {
                         ctx.actor.user_id,
                         &ctx.actor.username,
                         &note,
-                        stamp
+                        stamp,
+                        approver
                     ],
                 )
                 .await?;
@@ -2685,6 +2905,318 @@ impl Store for SqlStore {
         )
         .await?;
         let cancelled = fetch_owner_request(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(cancelled)
+    }
+
+    async fn link_user_owner(
+        &self,
+        ctx: &WriteContext,
+        user_id: Id,
+        owner_id: Option<Id>,
+    ) -> Result<User> {
+        let mut tx = self.begin().await?;
+        let before = fetch_user(&mut tx, user_id).await?;
+        if let Some(owner_id) = owner_id {
+            let exists = tx
+                .fetch_optional("SELECT id FROM owners WHERE id = ?1", params![owner_id])
+                .await?
+                .is_some();
+            if !exists {
+                return Err(Error::validation(
+                    "owner_id",
+                    "That Owner entry doesn't exist.",
+                ));
+            }
+        }
+        tx.execute(
+            "UPDATE owners SET user_id = NULL, updated_at = ?2 WHERE user_id = ?1",
+            params![user_id, now()],
+        )
+        .await?;
+        if let Some(owner_id) = owner_id {
+            tx.execute(
+                "UPDATE owners SET user_id = ?2, updated_at = ?3 WHERE id = ?1",
+                params![owner_id, user_id, now()],
+            )
+            .await?;
+        }
+        let after = fetch_user(&mut tx, user_id).await?;
+        if before.owner_id != after.owner_id {
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(ctx, AuditAction::Update, AuditEntity::User)
+                    .subject(user_id, &after.username)
+                    .changes(vec![FieldChange {
+                        field: "Owner entry".into(),
+                        old: before.owner_name.clone(),
+                        new: after.owner_name.clone(),
+                    }]),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(after)
+    }
+
+    async fn list_reservations(&self, filter: &ReservationFilter) -> Result<Vec<Reservation>> {
+        const SQL: &str = concat!(
+            reservation_select!(),
+            " WHERE (?1 IS NULL OR r.asset_id = ?1)
+                AND (?2 IS NULL OR r.end_date >= ?2)
+                AND (?3 IS NULL OR r.start_date <= ?3)
+                AND (?4 = TRUE OR r.status IN ('active', 'pending'))
+              ORDER BY r.start_date, r.id"
+        );
+        self.conn()
+            .await?
+            .fetch_all(
+                SQL,
+                params![
+                    filter.asset_id,
+                    filter.from,
+                    filter.to,
+                    filter.include_closed
+                ],
+            )
+            .await?
+            .iter()
+            .map(map_reservation)
+            .collect()
+    }
+
+    async fn get_reservation(&self, id: Id) -> Result<Reservation> {
+        fetch_reservation(&mut self.conn().await?, id).await
+    }
+
+    async fn check_reservation(
+        &self,
+        asset_id: Id,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<ReservationCheck> {
+        let mut conn = self.conn().await?;
+        let asset = fetch_asset(&mut conn, asset_id).await?;
+        check_reservable(&asset)?;
+        reservation_check(&mut conn, &asset, start, end).await
+    }
+
+    async fn create_reservation(
+        &self,
+        ctx: &WriteContext,
+        asset_id: Id,
+        start: NaiveDate,
+        end: NaiveDate,
+        note: Option<String>,
+        asks: Option<Id>,
+    ) -> Result<Reservation> {
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        if start < today() {
+            return Err(Error::validation(
+                "start_date",
+                "A reservation can't start in the past.",
+            ));
+        }
+        let mut tx = self.begin().await?;
+        let asset = fetch_asset(&mut tx, asset_id).await?;
+        check_reservable(&asset)?;
+        let check = reservation_check(&mut tx, &asset, start, end).await?;
+        let tag = &asset.asset_tag;
+        if let Some(holder) = &check.checked_out_to {
+            return Err(Error::Conflict(format!(
+                "{tag} is checked out to {holder}. It has to be returned before it can be reserved."
+            )));
+        }
+        let status = match asks {
+            None => {
+                if let Some(first) = check.conflicts.first() {
+                    return Err(Error::Conflict(format!(
+                        "{tag} is already reserved {} by {}.",
+                        reservation_span(first.start_date, first.end_date),
+                        first.user_name
+                    )));
+                }
+                ReservationStatus::Active
+            }
+            Some(asked) => {
+                let Some(blocking) = check.can_ask.as_ref().filter(|b| b.id == asked) else {
+                    return Err(Error::Conflict(format!(
+                        "Those dates clash with more than the reservation you're asking about. Choose other dates for {tag}."
+                    )));
+                };
+                if blocking.user_id == ctx.actor.user_id {
+                    return Err(Error::validation(
+                        "asks",
+                        "That's your own reservation. Change its dates instead.",
+                    ));
+                }
+                ReservationStatus::Pending
+            }
+        };
+        let id = tx
+            .insert(
+                "INSERT INTO reservations (asset_id, user_id, start_date, end_date, note, status,
+                                           asks_reservation_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                params![
+                    asset_id,
+                    ctx.actor.user_id,
+                    start,
+                    end,
+                    &note,
+                    status.as_str(),
+                    asks,
+                    now()
+                ],
+            )
+            .await?;
+        let created = fetch_reservation(&mut tx, id).await?;
+        let audit_ctx = WriteContext::new(ctx.actor.clone(), note.clone());
+        let (action, label) = match status {
+            ReservationStatus::Pending => (
+                AuditAction::Request,
+                format!(
+                    "{} (asks {} to end theirs early)",
+                    reservation_label(&created),
+                    created.asks_user_name.clone().unwrap_or_default()
+                ),
+            ),
+            _ => (AuditAction::Reserve, reservation_label(&created)),
+        };
+        reservation_audit(&mut tx, &audit_ctx, action, &created, None, Some(label)).await?;
+        tx.commit().await?;
+        Ok(created)
+    }
+
+    async fn answer_reservation_request(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        accept: bool,
+        note: Option<String>,
+    ) -> Result<Reservation> {
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        let mut tx = self.begin().await?;
+        let request = fetch_reservation(&mut tx, id).await?;
+        let (ReservationStatus::Pending, Some(asked)) =
+            (request.status, request.asks_reservation_id)
+        else {
+            return Err(Error::Conflict(format!(
+                "This reservation isn't waiting for an answer (it's {}).",
+                request.status
+            )));
+        };
+        let blocking = fetch_reservation(&mut tx, asked).await?;
+        let audit_ctx = WriteContext::new(ctx.actor.clone(), note.clone());
+        let stamp = now();
+        if accept {
+            if blocking.status == ReservationStatus::Active {
+                let new_end = request.start_date - chrono::Duration::days(1);
+                tx.execute(
+                    "UPDATE reservations SET end_date = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![blocking.id, new_end, stamp],
+                )
+                .await?;
+                let shortened = fetch_reservation(&mut tx, blocking.id).await?;
+                reservation_audit(
+                    &mut tx,
+                    &audit_ctx,
+                    AuditAction::Accept,
+                    &shortened,
+                    Some(reservation_label(&blocking)),
+                    Some(format!(
+                        "{} (ended early for {})",
+                        reservation_label(&shortened),
+                        request.user_name
+                    )),
+                )
+                .await?;
+            }
+            // Anything else booked over these dates since? Then it can't go ahead.
+            let clashes = overlapping_reservations(
+                &mut tx,
+                request.asset_id,
+                request.start_date,
+                request.end_date,
+            )
+            .await?
+            .into_iter()
+            .filter(|r| r.id != request.id && r.status == ReservationStatus::Active)
+            .count();
+            if clashes > 0 {
+                return Err(Error::Conflict(
+                    "Another reservation now overlaps these dates, so this one can't go ahead. Decline it instead."
+                        .into(),
+                ));
+            }
+        }
+        let status = if accept {
+            ReservationStatus::Active
+        } else {
+            ReservationStatus::Declined
+        };
+        tx.execute(
+            "UPDATE reservations SET status = ?2, decided_by = ?3, decided_at = ?4,
+                                     decision_note = ?5, updated_at = ?4
+             WHERE id = ?1",
+            params![id, status.as_str(), &ctx.actor.username, stamp, &note],
+        )
+        .await?;
+        let answered = fetch_reservation(&mut tx, id).await?;
+        if !accept {
+            reservation_audit(
+                &mut tx,
+                &audit_ctx,
+                AuditAction::Decline,
+                &answered,
+                Some(reservation_label(&answered)),
+                Some("Declined".into()),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(answered)
+    }
+
+    async fn cancel_reservation(&self, ctx: &WriteContext, id: Id) -> Result<Reservation> {
+        let mut tx = self.begin().await?;
+        let r = fetch_reservation(&mut tx, id).await?;
+        if !matches!(
+            r.status,
+            ReservationStatus::Active | ReservationStatus::Pending
+        ) {
+            return Err(Error::Conflict(format!(
+                "This reservation was already {}.",
+                r.status
+            )));
+        }
+        let stamp = now();
+        tx.execute(
+            "UPDATE reservations SET status = 'cancelled', decided_by = ?2, decided_at = ?3,
+                                     updated_at = ?3
+             WHERE id = ?1",
+            params![id, &ctx.actor.username, stamp],
+        )
+        .await?;
+        // Requests waiting on this one to end early no longer need to wait.
+        tx.execute(
+            "UPDATE reservations SET status = 'active', asks_reservation_id = NULL,
+                                     decision_note = 'The reservation it asked about was cancelled.',
+                                     updated_at = ?2
+             WHERE asks_reservation_id = ?1 AND status = 'pending'",
+            params![id, stamp],
+        )
+        .await?;
+        let cancelled = fetch_reservation(&mut tx, id).await?;
+        reservation_audit(
+            &mut tx,
+            ctx,
+            AuditAction::Cancel,
+            &cancelled,
+            Some(reservation_label(&r)),
+            Some("Cancelled".into()),
+        )
+        .await?;
         tx.commit().await?;
         Ok(cancelled)
     }

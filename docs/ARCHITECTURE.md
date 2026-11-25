@@ -164,7 +164,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 20) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 21) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -321,6 +321,41 @@ item has moved on, leaving the request waiting), recorded with "Requested by ...
 or **decline** it, with an optional note. The person who asked can **cancel** a waiting request.
 Requesting, declining, and cancelling are audited on the item too. Requests decided in the last 30
 days stay listed with their outcome.
+
+**Users and owners.** An administrator links a user account to an Owner entry (Users page,
+`owners.user_id`, schema 21; one each way). Owner dropdowns show a user icon on linked owners. A
+transfer request for an item held by a linked owner is addressed to that user
+(`owner_requests.approver_user_id`), who approves or declines it (Technicians and Administrators
+still can); requests for unlinked owners, and check-out requests, go to Technicians and
+Administrators. **Request instrument** on an item's page asks its holder to hand it over to the
+requester's own Owner entry, so it needs the requester to be linked.
+
+## Reservations
+
+Anyone can reserve an Instrument for a span of days (`reservations`, schema 21). Reserving only
+books the days; the instrument is handed over (checked out) when it starts and checked in when it's
+returned. The reserve dialog checks the dates as they're picked (`check_reservation`):
+
+* free: **Reserve** books it straight away;
+* checked out to someone: it can't be reserved until it's returned, so the dialog offers
+  **Request instrument** instead;
+* clashing with other reservations: it offers the **next free dates** of the same length, and when
+  the only clash is a reservation that started earlier, **asking its holder to end theirs early**.
+  That books the new reservation as *pending*; the holder accepts (theirs then ends the day before)
+  or declines. Cancelling the earlier reservation lets a pending one go ahead.
+
+The **Reservations** page lists instruments free to reserve now (not checked out, retired, away for
+service, or reserved today) with each one's next booking, the user's own reservations, and a month
+calendar of everyone's (past ones included). Reservations can be cancelled by the person they're
+for or by a Technician or Administrator. Reserving, early-return requests and answers, and
+cancelling are audited on the item.
+
+The **Dashboard** has a **Waiting for you** section below Needs attention: requests addressed to the
+user, requests to end their reservations early, and for Technicians and Administrators, check-out
+requests for no one in particular, reservations that have started but haven't been handed over
+(with a one-click check-out to the person's Owner entry), and ones that have ended with the
+instrument still out (one-click check-in). The sidebar badges on Available Inventory and
+Reservations count the same things.
 
 ## Reports and labels
 

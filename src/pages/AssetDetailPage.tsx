@@ -2,6 +2,8 @@ import { Alert, Button, Card, Chip, Table, toast } from "@heroui/react";
 import {
   Archive,
   ArchiveRestore,
+  CalendarPlus,
+  Hand,
   ArrowLeft,
   Boxes,
   ClipboardCheck,
@@ -24,6 +26,8 @@ import { CollapsibleCard, EmptyNote, ErrorAlert, Loading, Money, StatusChip } fr
 import { AttachmentsPanel } from "../components/Attachments";
 import { AuditList } from "../components/AuditList";
 import { ItemPhotos, useHeight, useItemPhotos } from "../components/ItemPhotos";
+import { ReserveDialog } from "../components/ReserveDialog";
+import { ownerRequestsChanged } from "../lib/ownerRequests";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import {
@@ -278,6 +282,9 @@ function ChangeHistory({ asset, version }: { asset: Asset; version: number }) {
   );
 }
 
+/** Retired or away for service: not reservable. */
+const AWAY_ROLES = new Set(["retired", "out_for_calibration", "out_for_repair"]);
+
 export function AssetDetailPage() {
   const { id } = useParams();
   const assetId = Number(id);
@@ -286,7 +293,9 @@ export function AssetDetailPage() {
 
   const [dialog, setDialog] = useState<{ open: boolean; record?: CalibrationRecord }>({ open: false });
   const [confirmArchive, setConfirmArchive] = useState(false);
-  const { can } = useAuth();
+  const [reserving, setReserving] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const { can, user } = useAuth();
   const canEdit = can("edit_records");
   // Bumped after any save so the history and children re-load.
   const [version, setVersion] = useState(0);
@@ -332,6 +341,21 @@ export function AssetDetailPage() {
               </Chip>
             </div>
             <p className="mt-1 text-sm text-muted">{asset.description}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Anyone can reserve a free instrument, or ask for one someone else has. */}
+            {!isSystem && !asset.is_archived && asset.owner_id == null && !AWAY_ROLES.has(asset.status_role ?? "") && (
+              <Button variant="secondary" onPress={() => setReserving(true)}>
+                <CalendarPlus className="size-4" /> Reserve
+              </Button>
+            )}
+            {!isSystem && !asset.is_archived && asset.owner_id != null && asset.owner_id !== user.owner_id && (
+              <span title={user.owner_id ? undefined : "Ask an administrator to link your account to an Owner entry first."}>
+                <Button variant="secondary" isDisabled={!user.owner_id} onPress={() => setRequesting(true)}>
+                  <Hand className="size-4" /> Request instrument
+                </Button>
+              </span>
+            )}
           </div>
           <div className={`flex shrink-0 items-center gap-2 ${canEdit ? "" : "hidden"}`}>
             <Button variant="secondary" onPress={() => navigate(`/assets/${asset.id}/edit`)}>
@@ -464,6 +488,29 @@ export function AssetDetailPage() {
         }}
       />
 
+      <ReserveDialog isOpen={reserving} onOpenChange={setReserving} asset={asset} />
+      <ConfirmDialog
+        isOpen={requesting}
+        onOpenChange={setRequesting}
+        title={`Request ${asset.asset_tag}?`}
+        confirmLabel="Send request"
+        tone="accent"
+        askReason
+        reasonLabel="Note (optional)"
+        onConfirm={async (note) => {
+          const r = await api.requestInstrument(asset.id, note);
+          toast.success(
+            r.approver_name
+              ? `Asked ${r.approver_name} to hand over ${r.asset_tag}.`
+              : `Requested ${r.asset_tag}. A Technician or Administrator will approve it.`,
+          );
+          ownerRequestsChanged();
+          setVersion((v) => v + 1);
+        }}
+      >
+        It's checked out to {asset.owner_name}. Asks them to hand it over to you
+        {user.owner_name ? ` (${user.owner_name})` : ""}; they can approve or decline.
+      </ConfirmDialog>
       <ConfirmDialog
         isOpen={confirmArchive}
         onOpenChange={setConfirmArchive}

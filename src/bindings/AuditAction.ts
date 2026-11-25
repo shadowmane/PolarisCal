@@ -3,4 +3,4 @@
 /**
  * The kind of event recorded in the audit trail.
  */
-export type AuditAction = "create" | "update" | "archive" | "restore" | "delete" | "sign_in" | "sign_in_failed" | "sign_out" | "password_change" | "password_reset" | "password_reset_request" | "password_expired" | "check_out" | "check_in" | "transfer" | "request" | "decline" | "cancel" | "export" | "import";
+export type AuditAction = "create" | "update" | "archive" | "restore" | "delete" | "sign_in" | "sign_in_failed" | "sign_out" | "password_change" | "password_reset" | "password_reset_request" | "password_expired" | "check_out" | "check_in" | "transfer" | "request" | "decline" | "cancel" | "reserve" | "accept" | "export" | "import";

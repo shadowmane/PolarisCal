@@ -31,6 +31,9 @@ import type { ConnectionStatus } from "../bindings/ConnectionStatus";
 import type { OwnerChange } from "../bindings/OwnerChange";
 import type { OwnerRequest } from "../bindings/OwnerRequest";
 import type { OwnerRequestFilter } from "../bindings/OwnerRequestFilter";
+import type { Reservation } from "../bindings/Reservation";
+import type { ReservationCheck } from "../bindings/ReservationCheck";
+import type { ReservationFilter } from "../bindings/ReservationFilter";
 import type { CopyReport } from "../bindings/CopyReport";
 import type { DatabaseConfig } from "../bindings/DatabaseConfig";
 import type { DueSummary } from "../bindings/DueSummary";
@@ -150,6 +153,26 @@ export const api = {
   cancelOwnerRequest: (id: number) => call<OwnerRequest>("cancel_owner_request", { id }),
   /** How many requests are waiting. Checked in the background: not activity. */
   pendingOwnerRequests: () => call<number>("pending_owner_requests"),
+  /** Asks an item's holder to hand it over to you (to your linked Owner entry). */
+  requestInstrument: (assetId: number, note: string | null = null) =>
+    call<OwnerRequest>("request_instrument", { asset_id: assetId, note: note || null }),
+  /** Links a user account to an Owner entry, or unlinks it with null (administrators). */
+  linkUserOwner: (userId: number, ownerId: number | null) =>
+    call<User>("link_user_owner", { user_id: userId, owner_id: ownerId }),
+  listReservations: (filter: Partial<ReservationFilter> = {}) =>
+    call<Reservation[]>("list_reservations", {
+      filter: { asset_id: null, from: null, to: null, include_closed: false, ...filter },
+    }),
+  checkReservation: (assetId: number, start: string, end: string) =>
+    call<ReservationCheck>("check_reservation", { asset_id: assetId, start, end }),
+  /** Reserves an item for you; with `asks`, asks that reservation's holder to end theirs early. */
+  createReservation: (assetId: number, start: string, end: string, note: string | null, asks: number | null = null) =>
+    call<Reservation>("create_reservation", { asset_id: assetId, start, end, note: note || null, asks }),
+  answerReservationRequest: (id: number, accept: boolean, note: string | null = null) =>
+    call<Reservation>("answer_reservation_request", { id, accept, note: note || null }),
+  cancelReservation: (id: number) => call<Reservation>("cancel_reservation", { id }),
+  /** Reservation matters waiting on you. Checked in the background: not activity. */
+  reservationActions: () => call<number>("reservation_actions"),
   addToSystem: (systemId: number, instrumentIds: number[]) =>
     call<void>("add_to_system", { system_id: systemId, instrument_ids: instrumentIds }),
   setAssetArchived: (id: number, expectedVersion: number, archived: boolean, reason: string) =>

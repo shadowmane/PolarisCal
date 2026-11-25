@@ -15,6 +15,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { GenerateCertificatePage } from "./pages/GenerateCertificatePage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { ListsPage } from "./pages/ListsPage";
+import { ReservationsPage } from "./pages/ReservationsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HistoryReportPage, ReportsPage } from "./pages/ReportsPage";
 import { LabelsPage } from "./pages/LabelsPage";
@@ -37,6 +38,7 @@ const router = createHashRouter([
       { path: "certificates/new", element: <GenerateCertificatePage /> },
       { path: "certificates/:id", element: <CertificatePage /> },
       { path: "inventory", element: <InventoryPage /> },
+      { path: "reservations", element: <ReservationsPage /> },
       { path: "lists", element: <ListsPage /> },
       { path: "users", element: <UsersPage /> },
       { path: "audit", element: <AuditPage /> },

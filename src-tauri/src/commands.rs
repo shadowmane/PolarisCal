@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use chrono::{Local, Utc};
+use chrono::{Local, NaiveDate, Utc};
 use polaris_core::audit::{Actor, AuditEntry, AuditFilter, WriteContext};
 use polaris_core::auth::{
     NewUser, PasswordPolicy, User, UserUpdate, hash_password, verify_password,
@@ -18,7 +18,8 @@ use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentCategory, AttachmentFilter,
     AttachmentFolder, CalibrationFilter, CalibrationInput, CalibrationRecord, LastCost,
     LookupInput, LookupItem, LookupKind, NewAttachment, OwnerChange, OwnerRequest,
-    OwnerRequestFilter, StoreInfo,
+    OwnerRequestFilter, OwnerRequestStatus, Reservation, ReservationCheck, ReservationFilter,
+    ReservationStatus, StoreInfo,
 };
 use polaris_core::schedule::DueSummary;
 use polaris_core::{Error, FieldError, Id, Store};
@@ -470,6 +471,19 @@ pub async fn password_reset_requests(state: State<'_, AppState>) -> CmdResult<us
         .count())
 }
 
+/// Links a user account to an Owner entry, or unlinks it (administrators).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn link_user_owner(
+    state: State<'_, AppState>,
+    user_id: Id,
+    owner_id: Option<Id>,
+) -> CmdResult<User> {
+    let (store, me) = require(&state, Need::Admin).await?;
+    Ok(store
+        .link_user_owner(&ctx(&me, None), user_id, owner_id)
+        .await?)
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn create_user(state: State<'_, AppState>, input: NewUser) -> CmdResult<User> {
     let (store, me) = require(&state, Need::Admin).await?;
@@ -700,10 +714,59 @@ pub async fn decide_owner_request(
     approve: bool,
     note: Option<String>,
 ) -> CmdResult<OwnerRequest> {
-    let (store, me) = require(&state, Need::Editor).await?;
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    let request = store.get_owner_request(id).await?;
+    if !can_decide(&me, &request) {
+        return Err(CommandError::new(
+            ErrorKind::Forbidden,
+            "This request is for the instrument's holder, or a Technician or Administrator, to decide.",
+        ));
+    }
     Ok(store
         .decide_owner_request(&ctx(&me, None), id, approve, note)
         .await?)
+}
+
+/// The user the request is addressed to (the holder), or any Technician or Administrator.
+fn can_decide(me: &User, request: &OwnerRequest) -> bool {
+    request.approver_user_id == Some(me.id) || me.role.can_edit_records()
+}
+
+/// Whether a waiting request is this user's to answer: addressed to them, or (for a
+/// Technician or Administrator) addressed to no one in particular.
+fn waits_on(me: &User, request: &OwnerRequest) -> bool {
+    request.status == OwnerRequestStatus::Pending
+        && match request.approver_user_id {
+            Some(user) => user == me.id,
+            None => me.role.can_edit_records(),
+        }
+}
+
+/// From an item's page: asks its holder to hand it over to the signed-in user (to their
+/// linked Owner entry).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn request_instrument(
+    state: State<'_, AppState>,
+    asset_id: Id,
+    note: Option<String>,
+) -> CmdResult<OwnerRequest> {
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    let Some(owner_id) = me.owner_id else {
+        return Err(Error::validation(
+            "owner_id",
+            "Your account isn't linked to an Owner entry yet, so there's no one to hand it to. Ask an administrator to link it on the Users page.",
+        )
+        .into());
+    };
+    let mut created = store
+        .request_owner_change(
+            &ctx(&me, None),
+            &[asset_id],
+            OwnerChange::Transfer { owner_id },
+            note,
+        )
+        .await?;
+    Ok(created.remove(0))
 }
 
 /// The person who asked can withdraw their request, as can a Technician or Administrator.
@@ -724,11 +787,128 @@ pub async fn cancel_owner_request(state: State<'_, AppState>, id: Id) -> CmdResu
 /// see. Checked in the background, so it doesn't count as activity.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn pending_owner_requests(state: State<'_, AppState>) -> CmdResult<usize> {
-    let (store, _) = require_passive(&state, Need::Editor).await?;
+    let (store, me) = require_passive(&state, Need::SignedIn).await?;
     Ok(store
         .list_owner_requests(&OwnerRequestFilter::default())
         .await?
-        .len())
+        .iter()
+        .filter(|r| waits_on(&me, r))
+        .count())
+}
+
+// ---------------------------------------------------------------------------
+// Reservations
+// ---------------------------------------------------------------------------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_reservations(
+    state: State<'_, AppState>,
+    filter: ReservationFilter,
+) -> CmdResult<Vec<Reservation>> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    Ok(store.list_reservations(&filter).await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn check_reservation(
+    state: State<'_, AppState>,
+    asset_id: Id,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> CmdResult<ReservationCheck> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    Ok(store.check_reservation(asset_id, start, end).await?)
+}
+
+/// Reserves an item for the signed-in user (anyone may), or with `asks`, asks the holder
+/// of an earlier overlapping reservation to end it early.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn create_reservation(
+    state: State<'_, AppState>,
+    asset_id: Id,
+    start: NaiveDate,
+    end: NaiveDate,
+    note: Option<String>,
+    asks: Option<Id>,
+) -> CmdResult<Reservation> {
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    Ok(store
+        .create_reservation(&ctx(&me, None), asset_id, start, end, note, asks)
+        .await?)
+}
+
+/// The holder's answer (or a Technician's or Administrator's) to a request to end their
+/// reservation early.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn answer_reservation_request(
+    state: State<'_, AppState>,
+    id: Id,
+    accept: bool,
+    note: Option<String>,
+) -> CmdResult<Reservation> {
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    let request = store.get_reservation(id).await?;
+    if request.asks_user_id != Some(me.id) && !me.role.can_edit_records() {
+        return Err(CommandError::new(
+            ErrorKind::Forbidden,
+            "Only the person holding the reservation, or a Technician or Administrator, can answer this.",
+        ));
+    }
+    Ok(store
+        .answer_reservation_request(&ctx(&me, None), id, accept, note)
+        .await?)
+}
+
+/// The person it's for can cancel a reservation, as can a Technician or Administrator.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cancel_reservation(state: State<'_, AppState>, id: Id) -> CmdResult<Reservation> {
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    let r = store.get_reservation(id).await?;
+    if r.user_id != me.id && !me.role.can_edit_records() {
+        return Err(CommandError::new(
+            ErrorKind::Forbidden,
+            "Only the person it's for, or a Technician or Administrator, can cancel this reservation.",
+        ));
+    }
+    Ok(store.cancel_reservation(&ctx(&me, None), id).await?)
+}
+
+/// Reservation matters waiting on this user, for the sidebar badge: requests to end their
+/// reservations early, and for a Technician or Administrator, instruments to hand over
+/// today or take back. Checked in the background, so not activity.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn reservation_actions(state: State<'_, AppState>) -> CmdResult<usize> {
+    let (store, me) = require_passive(&state, Need::SignedIn).await?;
+    let today = Local::now().date_naive();
+    let recent = store
+        .list_reservations(&ReservationFilter {
+            from: Some(today - chrono::Duration::days(90)),
+            ..Default::default()
+        })
+        .await?;
+    let editor = me.role.can_edit_records();
+    Ok(recent
+        .iter()
+        .filter(|r| match r.status {
+            ReservationStatus::Pending => r.asks_user_id == Some(me.id),
+            ReservationStatus::Active if editor => {
+                needs_handover(r, today) || needs_return(r, today)
+            }
+            _ => false,
+        })
+        .count())
+}
+
+/// A booked reservation that has started, but the item isn't checked out to its holder.
+fn needs_handover(r: &Reservation, today: NaiveDate) -> bool {
+    r.start_date <= today
+        && today <= r.end_date
+        && (r.asset_owner_id.is_none() || r.asset_owner_id != r.user_owner_id)
+}
+
+/// A reservation that has ended while the item is still checked out to its holder.
+fn needs_return(r: &Reservation, today: NaiveDate) -> bool {
+    r.end_date < today && r.asset_owner_id.is_some() && r.asset_owner_id == r.user_owner_id
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -11,6 +11,7 @@ import { useAuth } from "../lib/auth";
 import { EMPTY, formatDateTime } from "../lib/format";
 import { type FieldErrors, fieldErrors } from "../lib/forms";
 import { ROLES, roleMeta } from "../lib/permissions";
+import { lookupOptions, useLookups } from "../lib/lookups";
 import { checkPassword, describePasswordRules } from "../lib/password";
 import { resetRequestsChanged } from "../lib/resetRequests";
 import { useAsync } from "../lib/useAsync";
@@ -261,9 +262,11 @@ function EditUserDialog({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("viewer");
   const [active, setActive] = useState(true);
+  const [ownerId, setOwnerId] = useState<number | null>(null);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [message, setMessage] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const lookups = useLookups();
 
   useEffect(() => {
     if (!user) return;
@@ -271,6 +274,8 @@ function EditUserDialog({
     setEmail(user.email ?? "");
     setRole(user.role);
     setActive(user.is_active);
+    setOwnerId(user.owner_id);
+    lookups.reload();
     setErrors({});
     setMessage(undefined);
   }, [user]);
@@ -286,6 +291,7 @@ function EditUserDialog({
         role,
         is_active: active,
       });
+      if (ownerId !== user.owner_id) await api.linkUserOwner(user.id, ownerId);
       toast.success(`Saved ${displayName}`);
       onSaved();
       onOpenChange(false);
@@ -327,6 +333,17 @@ function EditUserDialog({
           isSelected={active}
           onChange={setActive}
           isDisabled={isMe}
+        />
+        <SelectInput<number>
+          label="Owner entry"
+          value={ownerId}
+          onChange={setOwnerId}
+          options={lookupOptions(lookups.data, "owner", ownerId).map((o) => {
+            const linkedTo = lookups.data?.owner.find((x) => x.id === o.id)?.user_name;
+            return linkedTo && o.id !== user?.owner_id ? { ...o, description: `Linked to ${linkedTo} now; saving moves it here` } : o;
+          })}
+          placeholder="Not linked"
+          description="Who this person is in the Owners list. Items checked out to that owner are theirs: they're asked when someone requests one, and can request instruments for themselves."
         />
         {user && <SignatureField user={user} />}
       </form>
@@ -447,6 +464,7 @@ export function UsersPage() {
                 <Table.Column isRowHeader>Name</Table.Column>
                 <Table.Column>Username</Table.Column>
                 <Table.Column>Role</Table.Column>
+                <Table.Column>Owner entry</Table.Column>
                 <Table.Column>Last sign-in</Table.Column>
                 <Table.Column>State</Table.Column>
                 <Table.Column>
@@ -465,6 +483,7 @@ export function UsersPage() {
                     </Table.Cell>
                     <Table.Cell>{u.username}</Table.Cell>
                     <Table.Cell>{roleMeta[u.role].label}</Table.Cell>
+                    <Table.Cell>{u.owner_name ?? EMPTY}</Table.Cell>
                     <Table.Cell>{u.last_sign_in_at ? formatDateTime(u.last_sign_in_at) : EMPTY}</Table.Cell>
                     <Table.Cell>
                       <div className="flex flex-wrap gap-1.5">

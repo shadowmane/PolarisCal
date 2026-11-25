@@ -80,6 +80,8 @@ describe("pickable", () => {
     is_extension: null,
     is_repair: null,
     status_role: null,
+    user_id: null,
+    user_name: null,
   });
 
   it("offers active entries plus the current value even if inactive", () => {

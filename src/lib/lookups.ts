@@ -1,3 +1,5 @@
+import { UserRound } from "lucide-react";
+import { createElement } from "react";
 import type { LookupItem } from "../bindings/LookupItem";
 import type { LookupKind } from "../bindings/LookupKind";
 import type { Option } from "../components/fields";
@@ -25,5 +27,10 @@ export function lookupOptions(
   return pickable(map?.[kind], current).map((i) => ({
     id: i.id,
     label: i.is_active ? i.name : `${i.name} (inactive)`,
+    // Owners linked to a user account get a user icon, so people can tell them from groups.
+    icon:
+      i.user_id != null
+        ? createElement(UserRound, { className: "size-3.5 shrink-0 text-accent", "aria-label": "User account" })
+        : undefined,
   }));
 }

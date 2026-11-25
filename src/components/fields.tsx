@@ -244,6 +244,8 @@ export interface Option<K extends string | number> {
   id: K;
   label: string;
   description?: string;
+  /** Shown before the label in the list (e.g. a user icon on owners linked to an account). */
+  icon?: ReactNode;
 }
 
 /** Single-choice dropdown. `allowEmpty` adds a clear button for optional fields. */
@@ -301,7 +303,10 @@ export function SelectInput<K extends string | number>({
           {options.map((o) => (
             <ListBox.Item key={String(o.id)} id={o.id} textValue={o.label}>
               <div className="flex flex-col">
-                <span>{o.label}</span>
+                <span className="flex items-center gap-1.5">
+                  {o.icon}
+                  {o.label}
+                </span>
                 {o.description && <span className="text-xs text-muted">{o.description}</span>}
               </div>
               <ListBox.ItemIndicator />

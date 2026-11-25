@@ -14,4 +14,9 @@ owner_id: number, owner_name: string,
 /**
  * Who has the item now.
  */
-current_owner_name: string | null, requested_by_id: number | null, requested_by: string, note: string | null, status: OwnerRequestStatus, decided_by: string | null, decided_at: string | null, decision_note: string | null, created_at: string, };
+current_owner_name: string | null, requested_by_id: number | null, requested_by: string, note: string | null, status: OwnerRequestStatus, 
+/**
+ * Who decides: the user linked to the item's owner. Empty means a Technician or
+ * Administrator.
+ */
+approver_user_id: number | null, approver_name: string | null, decided_by: string | null, decided_at: string | null, decision_note: string | null, created_at: string, };

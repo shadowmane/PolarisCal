@@ -1,6 +1,7 @@
 import { Button, Modal, Toast, Tooltip, toast } from "@heroui/react";
 import {
   ArrowDownCircle,
+  CalendarDays,
   ClipboardCheck,
   Database,
   FileBadge,
@@ -28,6 +29,7 @@ import { type Permission, roleMeta } from "../lib/permissions";
 import { setCurrencySymbol } from "../lib/currency";
 import { setDateFormat } from "../lib/dates";
 import { usePendingOwnerRequestCount } from "../lib/ownerRequests";
+import { useReservationActionCount } from "../lib/reservations";
 import { useResetRequestCount } from "../lib/resetRequests";
 import { useTheme } from "../lib/theme";
 import { setNoticeDismissed, useAvailableUpdate, useNoticeDismissed } from "../lib/updates";
@@ -48,6 +50,7 @@ const MAIN_NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/assets", label: "Instruments & Systems", icon: Gauge },
   { to: "/inventory", label: "Available Inventory", icon: PackageCheck },
+  { to: "/reservations", label: "Reservations", icon: CalendarDays },
   { to: "/calibrations", label: "Service Records", icon: ClipboardCheck },
   { to: "/certificates/new", label: "Generate Certificate", icon: FileBadge },
   { to: "/reports", label: "Reports", icon: FileChartColumn },
@@ -201,7 +204,9 @@ export function AppShell() {
       : item,
   );
   // Viewers can't generate certificates, but can look through the issued ones.
-  const ownerRequests = usePendingOwnerRequestCount(can("edit_records"));
+  // Requests addressed to you (or, for Technicians and Administrators, to no one in particular).
+  const ownerRequests = usePendingOwnerRequestCount(true);
+  const reservationActions = useReservationActionCount(true);
   const mainNav = MAIN_NAV.map((item) =>
     item.to === "/certificates/new" && !can("edit_records")
       ? { ...item, to: "/certificates", label: "Certificates" }
@@ -213,7 +218,15 @@ export function AppShell() {
               label: `${ownerRequests} check-out request${ownerRequests === 1 ? "" : "s"} waiting`,
             },
           }
-        : item,
+        : item.to === "/reservations"
+          ? {
+              ...item,
+              badge: {
+                count: reservationActions,
+                label: `${reservationActions} reservation matter${reservationActions === 1 ? "" : "s"} waiting on you`,
+              },
+            }
+          : item,
   );
   const update = useAvailableUpdate();
   const noticeDismissed = useNoticeDismissed();

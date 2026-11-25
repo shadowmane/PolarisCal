@@ -17,4 +17,8 @@ password_changed_at: string | null,
  * When the user asked for a password reset from the sign-in screen; cleared when a
  * new password is set.
  */
-reset_requested_at: string | null, row_version: number, created_at: string, updated_at: string, };
+reset_requested_at: string | null, 
+/**
+ * The Owner entry this account is (linked by an administrator), if any.
+ */
+owner_id: number | null, owner_name: string | null, row_version: number, created_at: string, updated_at: string, };

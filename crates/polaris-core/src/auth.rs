@@ -149,6 +149,9 @@ pub struct User {
     /// When the user asked for a password reset from the sign-in screen; cleared when a
     /// new password is set.
     pub reset_requested_at: Option<DateTime<Utc>>,
+    /// The Owner entry this account is (linked by an administrator), if any.
+    pub owner_id: Option<Id>,
+    pub owner_name: Option<String>,
     pub row_version: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

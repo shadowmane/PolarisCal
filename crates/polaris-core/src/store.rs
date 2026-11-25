@@ -10,10 +10,12 @@ use crate::model::AuditAction;
 use crate::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentFilter, CalibrationFilter,
     CalibrationInput, CalibrationRecord, LastCost, LookupInput, LookupItem, LookupKind,
-    NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, StoreInfo,
+    NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, Reservation, ReservationCheck,
+    ReservationFilter, StoreInfo,
 };
 use crate::transfer::{DataSet, TableCount};
 use crate::{Id, Result};
+use chrono::NaiveDate;
 
 /// Persistence interface implemented once per database backend.
 ///
@@ -160,6 +162,50 @@ pub trait Store: Send + Sync {
     ) -> Result<OwnerRequest>;
     /// Withdraws a waiting request. Who may do this is checked by the caller.
     async fn cancel_owner_request(&self, ctx: &WriteContext, id: Id) -> Result<OwnerRequest>;
+    /// Links a user account to an Owner entry (or unlinks it with `None`). An owner can be
+    /// linked to one user, and a user to one owner; an existing link is moved.
+    async fn link_user_owner(
+        &self,
+        ctx: &WriteContext,
+        user_id: Id,
+        owner_id: Option<Id>,
+    ) -> Result<User>;
+
+    async fn list_reservations(&self, filter: &ReservationFilter) -> Result<Vec<Reservation>>;
+    async fn get_reservation(&self, id: Id) -> Result<Reservation>;
+    /// What's in the way of reserving an item for these dates (nothing, if it's free).
+    async fn check_reservation(
+        &self,
+        asset_id: Id,
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<ReservationCheck>;
+    /// Reserves an item for the signed-in user. With `asks`, the dates overlap that one
+    /// earlier reservation, whose holder is asked to end it early; the new reservation
+    /// waits for their answer. Refused if the item is checked out or anything else is in
+    /// the way.
+    async fn create_reservation(
+        &self,
+        ctx: &WriteContext,
+        asset_id: Id,
+        start: NaiveDate,
+        end: NaiveDate,
+        note: Option<String>,
+        asks: Option<Id>,
+    ) -> Result<Reservation>;
+    /// The holder's answer to a waiting reservation: accepting ends theirs the day before
+    /// it starts and books it; declining turns it down. Who may answer is checked by the
+    /// caller.
+    async fn answer_reservation_request(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        accept: bool,
+        note: Option<String>,
+    ) -> Result<Reservation>;
+    /// Cancels a booked or waiting reservation. Who may is checked by the caller.
+    async fn cancel_reservation(&self, ctx: &WriteContext, id: Id) -> Result<Reservation>;
+
     /// Moves Instruments into a System (e.g. when the System is created), each audited as
     /// an edit of the Instrument. Archived items and Systems can't be added. Like any
     /// Instrument in a System, they take the System's location and department (as they do

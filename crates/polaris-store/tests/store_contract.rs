@@ -221,7 +221,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 20);
+    assert_eq!(info.schema_version, 21);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -2624,6 +2624,357 @@ async fn viewers_request_check_outs_that_technicians_approve_or_decline() {
         s.get_owner_request(stale[0].id).await.unwrap().status,
         OwnerRequestStatus::Pending
     );
+}
+
+fn as_user(u: &polaris_core::auth::User) -> WriteContext {
+    WriteContext::new(
+        Actor {
+            user_id: u.id,
+            username: u.username.clone(),
+        },
+        None,
+    )
+}
+
+#[tokio::test]
+async fn users_link_to_owners_and_transfer_requests_go_to_the_holder() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let val = s
+        .create_user(&ctx(), new_user("vlee", Role::Viewer))
+        .await
+        .unwrap();
+    let kim = s
+        .create_user(&ctx(), new_user("jkim", Role::Technician))
+        .await
+        .unwrap();
+    let owner = |name: &'static str| async move {
+        s.create_lookup(&ctx(), LookupKind::Owner, lookup(name))
+            .await
+            .unwrap()
+            .id
+    };
+    let (val_owner, kim_owner, team) = (
+        owner("Val Lee").await,
+        owner("Jordan Kim").await,
+        owner("Lab Team").await,
+    );
+
+    let linked = s
+        .link_user_owner(&ctx(), val.id, Some(val_owner))
+        .await
+        .unwrap();
+    assert_eq!(linked.owner_name.as_deref(), Some("Val Lee"));
+    s.link_user_owner(&ctx(), kim.id, Some(kim_owner))
+        .await
+        .unwrap();
+    let owners = s.list_lookups(LookupKind::Owner, true).await.unwrap();
+    let val_entry = owners.iter().find(|o| o.id == val_owner).unwrap();
+    assert_eq!(
+        (val_entry.user_id, val_entry.user_name.as_deref()),
+        (Some(val.id), Some("vlee name"))
+    );
+    assert!(
+        owners
+            .iter()
+            .find(|o| o.id == team)
+            .unwrap()
+            .user_id
+            .is_none()
+    );
+
+    // Moving a link: the owner's previous user loses it.
+    s.link_user_owner(&ctx(), kim.id, Some(val_owner))
+        .await
+        .unwrap();
+    assert_eq!(s.get_user(val.id).await.unwrap().owner_id, None);
+    s.link_user_owner(&ctx(), kim.id, Some(kim_owner))
+        .await
+        .unwrap();
+    s.link_user_owner(&ctx(), val.id, Some(val_owner))
+        .await
+        .unwrap();
+
+    // An item held by Kim: Val's transfer request is Kim's to decide.
+    let item = s
+        .create_asset(&ctx(), asset_input(s, "LK-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    s.change_owner(
+        &ctx(),
+        &[item.id],
+        OwnerChange::CheckOut {
+            owner_id: kim_owner,
+        },
+    )
+    .await
+    .unwrap();
+    let req = s
+        .request_owner_change(
+            &as_user(&val),
+            &[item.id],
+            OwnerChange::Transfer {
+                owner_id: val_owner,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(req[0].approver_user_id, Some(kim.id));
+    assert_eq!(req[0].approver_name.as_deref(), Some("jkim name"));
+    s.decide_owner_request(&as_user(&kim), req[0].id, true, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.get_asset(item.id).await.unwrap().owner_id,
+        Some(val_owner)
+    );
+
+    // Held by a group owner with no user: a Technician or Administrator decides.
+    let other = s
+        .create_asset(&ctx(), asset_input(s, "LK-2", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    s.change_owner(
+        &ctx(),
+        &[other.id],
+        OwnerChange::CheckOut { owner_id: team },
+    )
+    .await
+    .unwrap();
+    let req = s
+        .request_owner_change(
+            &as_user(&val),
+            &[other.id],
+            OwnerChange::Transfer {
+                owner_id: val_owner,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(req[0].approver_user_id, None);
+    // Asking for what you already hold is refused.
+    assert!(
+        s.request_owner_change(
+            &as_user(&val),
+            &[item.id],
+            OwnerChange::Transfer {
+                owner_id: kim_owner
+            },
+            None
+        )
+        .await
+        .is_err()
+    );
+    // Unlinking.
+    assert_eq!(
+        s.link_user_owner(&ctx(), val.id, None)
+            .await
+            .unwrap()
+            .owner_id,
+        None
+    );
+}
+
+#[tokio::test]
+async fn reservations_book_clash_and_end_early_on_request() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let val = s
+        .create_user(&ctx(), new_user("vlee", Role::Viewer))
+        .await
+        .unwrap();
+    let kim = s
+        .create_user(&ctx(), new_user("jkim", Role::Viewer))
+        .await
+        .unwrap();
+    let item = s
+        .create_asset(&ctx(), asset_input(s, "RS-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let today = Local::now().date_naive();
+    let day = |n: i64| {
+        if n >= 0 {
+            today + Days::new(n as u64)
+        } else {
+            today - Days::new((-n) as u64)
+        }
+    };
+
+    // Val books days 10-20.
+    let check = s
+        .check_reservation(item.id, day(10), day(20))
+        .await
+        .unwrap();
+    assert!(check.conflicts.is_empty() && check.checked_out_to.is_none());
+    let vals = s
+        .create_reservation(
+            &as_user(&val),
+            item.id,
+            day(10),
+            day(20),
+            Some("Audit".into()),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(vals.status, ReservationStatus::Active);
+
+    // Kim wants 15-25: clashes. The check names Val's and suggests the 21st.
+    let check = s
+        .check_reservation(item.id, day(15), day(25))
+        .await
+        .unwrap();
+    assert_eq!(check.conflicts.len(), 1);
+    assert_eq!(check.can_ask.as_ref().map(|r| r.id), Some(vals.id));
+    assert_eq!(check.next_free_start, Some(day(21)));
+    assert!(matches!(
+        s.create_reservation(&as_user(&kim), item.id, day(15), day(25), None, None)
+            .await,
+        Err(Error::Conflict(_))
+    ));
+    // Days 5-12 start before Val's: Val's can't be asked to end early for that.
+    assert!(
+        s.check_reservation(item.id, day(5), day(12))
+            .await
+            .unwrap()
+            .can_ask
+            .is_none()
+    );
+    // In the past: refused.
+    assert!(
+        s.create_reservation(&as_user(&kim), item.id, day(-1), day(2), None, None)
+            .await
+            .is_err()
+    );
+
+    // Kim asks Val to end early; Val declines.
+    let ask = s
+        .create_reservation(
+            &as_user(&kim),
+            item.id,
+            day(15),
+            day(25),
+            None,
+            Some(vals.id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ask.status, ReservationStatus::Pending);
+    assert_eq!(ask.asks_user_id, Some(val.id));
+    let declined = s
+        .answer_reservation_request(&as_user(&val), ask.id, false, Some("Need it all".into()))
+        .await
+        .unwrap();
+    assert_eq!(declined.status, ReservationStatus::Declined);
+    assert_eq!(s.get_reservation(vals.id).await.unwrap().end_date, day(20));
+
+    // Asks again; Val accepts: Val's now ends on the 14th, Kim's is booked.
+    let ask = s
+        .create_reservation(
+            &as_user(&kim),
+            item.id,
+            day(15),
+            day(25),
+            None,
+            Some(vals.id),
+        )
+        .await
+        .unwrap();
+    let accepted = s
+        .answer_reservation_request(&as_user(&val), ask.id, true, None)
+        .await
+        .unwrap();
+    assert_eq!(accepted.status, ReservationStatus::Active);
+    assert_eq!(s.get_reservation(vals.id).await.unwrap().end_date, day(14));
+
+    // A request waiting on a reservation that's then cancelled goes ahead.
+    let later = s
+        .create_reservation(&as_user(&val), item.id, day(30), day(40), None, None)
+        .await
+        .unwrap();
+    let waiting = s
+        .create_reservation(
+            &as_user(&kim),
+            item.id,
+            day(35),
+            day(45),
+            None,
+            Some(later.id),
+        )
+        .await
+        .unwrap();
+    s.cancel_reservation(&as_user(&val), later.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        s.get_reservation(waiting.id).await.unwrap().status,
+        ReservationStatus::Active
+    );
+
+    // The calendar lists booked ones by date range; cancelled ones only when asked.
+    let in_range = s
+        .list_reservations(&ReservationFilter {
+            from: Some(day(10)),
+            to: Some(day(26)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        in_range.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [vals.id, ask.id]
+    );
+    let all = s
+        .list_reservations(&ReservationFilter {
+            include_closed: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        all.len(),
+        5,
+        "booked, declined, accepted, cancelled, and freed"
+    );
+
+    // A checked-out item can't be reserved.
+    let owner = s
+        .create_lookup(&ctx(), LookupKind::Owner, lookup("Lab Team"))
+        .await
+        .unwrap()
+        .id;
+    s.change_owner(
+        &ctx(),
+        &[item.id],
+        OwnerChange::CheckOut { owner_id: owner },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        s.check_reservation(item.id, day(50), day(51))
+            .await
+            .unwrap()
+            .checked_out_to
+            .as_deref(),
+        Some("Lab Team")
+    );
+    assert!(matches!(
+        s.create_reservation(&as_user(&kim), item.id, day(50), day(51), None, None).await,
+        Err(Error::Conflict(ref m)) if m.contains("returned")
+    ));
+
+    // It's all in the item's history.
+    let history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(item.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(history.iter().any(|e| e.action == AuditAction::Reserve));
+    assert!(history.iter().any(|e| e.action == AuditAction::Accept));
 }
 
 #[tokio::test]

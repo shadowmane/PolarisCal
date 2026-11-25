@@ -109,7 +109,9 @@ export const auditActionMeta: Record<AuditAction, { label: string; color: ChipCo
   transfer: { label: "Transferred", color: "accent" },
   request: { label: "Requested", color: "warning" },
   decline: { label: "Request declined", color: "danger" },
-  cancel: { label: "Request cancelled", color: "default" },
+  cancel: { label: "Cancelled", color: "default" },
+  reserve: { label: "Reserved", color: "accent" },
+  accept: { label: "Request accepted", color: "success" },
   export: { label: "Data copied out", color: "default" },
   import: { label: "Data copied in", color: "accent" },
 };

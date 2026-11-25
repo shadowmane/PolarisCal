@@ -175,6 +175,10 @@ text_enum!(
         Decline => "decline",
         /// The person who asked (or a Technician or Administrator) withdrew the request.
         Cancel => "cancel",
+        /// An item was reserved for someone.
+        Reserve => "reserve",
+        /// The holder of a reservation agreed to end it early for someone else.
+        Accept => "accept",
         /// All data was copied from this database to another one.
         Export => "export",
         /// This database was filled with data copied from another one.
@@ -303,10 +307,86 @@ pub struct OwnerRequest {
     pub requested_by: String,
     pub note: Option<String>,
     pub status: OwnerRequestStatus,
+    /// Who decides: the user linked to the item's owner. Empty means a Technician or
+    /// Administrator.
+    pub approver_user_id: Option<Id>,
+    pub approver_name: Option<String>,
     pub decided_by: Option<String>,
     pub decided_at: Option<DateTime<Utc>>,
     pub decision_note: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+text_enum!(
+    /// Where a reservation stands.
+    ReservationStatus {
+        /// Booked.
+        Active => "active",
+        /// Waiting for the holder of an earlier, overlapping reservation to end theirs early.
+        Pending => "pending",
+        /// That holder said no.
+        Declined => "declined",
+        Cancelled => "cancelled",
+    }
+);
+
+/// An Instrument booked for someone from `start_date` to `end_date` (both included).
+/// Reserving doesn't check the item out; it's handed over (checked out) when it starts.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct Reservation {
+    pub id: Id,
+    pub asset_id: Id,
+    pub asset_tag: String,
+    pub asset_description: String,
+    /// Who the item is checked out to now, if anyone.
+    pub asset_owner_id: Option<Id>,
+    pub asset_owner_name: Option<String>,
+    /// Who it's reserved for.
+    pub user_id: Id,
+    pub user_name: String,
+    /// The Owner entry linked to that user, if any (to check the item out to them).
+    pub user_owner_id: Option<Id>,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub note: Option<String>,
+    pub status: ReservationStatus,
+    /// For a pending reservation: the reservation it asks to be ended early, and its holder.
+    pub asks_reservation_id: Option<Id>,
+    pub asks_user_id: Option<Id>,
+    pub asks_user_name: Option<String>,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<DateTime<Utc>>,
+    pub decision_note: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Booked and waiting reservations overlapping `from`..`to` (either may be open), for one
+/// item or all; `include_closed` adds declined and cancelled ones.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReservationFilter {
+    pub asset_id: Option<Id>,
+    pub from: Option<NaiveDate>,
+    pub to: Option<NaiveDate>,
+    #[serde(default)]
+    pub include_closed: bool,
+}
+
+/// Whether an item can be reserved for some dates, and if not, what's in the way.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct ReservationCheck {
+    /// Checked out to this owner now: it must be returned before it can be reserved.
+    pub checked_out_to: Option<String>,
+    /// Booked or waiting reservations overlapping the dates.
+    pub conflicts: Vec<Reservation>,
+    /// The one reservation whose holder could be asked to end it early (it started before
+    /// the dates asked for and is the only conflict).
+    pub can_ask: Option<Reservation>,
+    /// The first start date on or after the one asked for when the same number of days is
+    /// free, if found.
+    pub next_free_start: Option<NaiveDate>,
 }
 
 /// Waiting requests, plus those decided since `decided_since` when it's given.
@@ -642,6 +722,9 @@ pub struct LookupItem {
     pub is_repair: Option<bool>,
     /// Statuses only: set on the built-in statuses, which can't be deleted.
     pub status_role: Option<StatusRole>,
+    /// Owners only: the user account linked to this Owner entry.
+    pub user_id: Option<Id>,
+    pub user_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
