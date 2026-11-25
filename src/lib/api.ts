@@ -28,6 +28,9 @@ import type { ConnectionCheck } from "../bindings/ConnectionCheck";
 import type { ConnectionChoice } from "../bindings/ConnectionChoice";
 import type { ConnectionSettings } from "../bindings/ConnectionSettings";
 import type { ConnectionStatus } from "../bindings/ConnectionStatus";
+import type { OwnerChange } from "../bindings/OwnerChange";
+import type { OwnerRequest } from "../bindings/OwnerRequest";
+import type { OwnerRequestFilter } from "../bindings/OwnerRequestFilter";
 import type { CopyReport } from "../bindings/CopyReport";
 import type { DatabaseConfig } from "../bindings/DatabaseConfig";
 import type { DueSummary } from "../bindings/DueSummary";
@@ -133,6 +136,20 @@ export const api = {
   createAsset: (input: AssetInput) => call<Asset>("create_asset", { input }),
   updateAsset: (id: number, expectedVersion: number, input: AssetInput, reason: string) =>
     call<Asset>("update_asset", { id, expected_version: expectedVersion, input, reason }),
+  /** Checks Instruments out, back in, or over to another owner (all or none). */
+  changeOwner: (assetIds: number[], change: OwnerChange, reason: string | null = null) =>
+    call<Asset[]>("change_owner", { asset_ids: assetIds, change, reason: reason || null }),
+  /** Waiting check-out requests, plus those decided since `decided_since` if given. */
+  listOwnerRequests: (filter: Partial<OwnerRequestFilter> = {}) =>
+    call<OwnerRequest[]>("list_owner_requests", { filter: { asset_id: null, decided_since: null, ...filter } }),
+  /** Asks a Technician or Administrator to check items out or transfer them. */
+  requestOwnerChange: (assetIds: number[], change: OwnerChange, note: string | null = null) =>
+    call<OwnerRequest[]>("request_owner_change", { asset_ids: assetIds, change, note: note || null }),
+  decideOwnerRequest: (id: number, approve: boolean, note: string | null = null) =>
+    call<OwnerRequest>("decide_owner_request", { id, approve, note: note || null }),
+  cancelOwnerRequest: (id: number) => call<OwnerRequest>("cancel_owner_request", { id }),
+  /** How many requests are waiting. Checked in the background: not activity. */
+  pendingOwnerRequests: () => call<number>("pending_owner_requests"),
   addToSystem: (systemId: number, instrumentIds: number[]) =>
     call<void>("add_to_system", { system_id: systemId, instrument_ids: instrumentIds }),
   setAssetArchived: (id: number, expectedVersion: number, archived: boolean, reason: string) =>

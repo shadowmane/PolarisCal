@@ -164,7 +164,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 18) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 20) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -296,6 +296,31 @@ or Limited asks what status the item gets back, suggesting the status it had bef
 An item remembers that status (`previous_status_id`) whenever a service record changes its status.
 A failed repair that also counts as a calibration retires the item without the repair-or-retire
 question.
+
+## Check-out (Available Inventory)
+
+An Instrument's **Owner** is who it's checked out to. The **Available Inventory** page lists
+Instruments with no owner that aren't retired or away for calibration or repair, and, under
+**Checked out**, the rest by owner. Technicians and Administrators select instruments and
+**check out** (set the owner), **check in** (clear it), or **transfer** (owner to owner) through
+`Store::change_owner`: one transaction for all the chosen items, refused as a whole if any is
+archived, a System, or in the wrong state (checking out one that's already out, and so on). Each
+item gets an audit entry (`Checked out` / `Checked in` / `Transferred`) with the Owner change and
+the optional note as its reason. `assets.owner_since` (schema 19) records when the current owner got
+it, also when the owner is changed on the edit form; it's empty for assignments made before then.
+The check-out dialog warns about instruments that are overdue or in Storage.
+
+**Requests.** Viewers can't change owners themselves; they select instruments and **request a check
+out or transfer** to an owner, with an optional note (`owner_requests`, schema 20). Check-in can't
+be requested, since it means handling the item back into the store. One request may wait per item,
+and a request is refused if the change couldn't be made now. Waiting requests are listed under
+**Requests** for everyone, with a red count on Available Inventory for Technicians and
+Administrators (checked in the background, not counted as activity). They **approve** it, which
+makes the change exactly as a direct check-out or transfer would (and fails the same way if the
+item has moved on, leaving the request waiting), recorded with "Requested by ..." as its reason;
+or **decline** it, with an optional note. The person who asked can **cancel** a waiting request.
+Requesting, declining, and cancelling are audited on the item too. Requests decided in the last 30
+days stay listed with their outcome.
 
 ## Reports and labels
 

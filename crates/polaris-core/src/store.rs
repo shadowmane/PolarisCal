@@ -10,7 +10,7 @@ use crate::model::AuditAction;
 use crate::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentFilter, CalibrationFilter,
     CalibrationInput, CalibrationRecord, LastCost, LookupInput, LookupItem, LookupKind,
-    NewAttachment, StoreInfo,
+    NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, StoreInfo,
 };
 use crate::transfer::{DataSet, TableCount};
 use crate::{Id, Result};
@@ -127,6 +127,39 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         input: AssetInput,
     ) -> Result<Asset>;
+    /// Checks Instruments out to an owner, back in, or over to another owner, all or none,
+    /// each audited on the item. Archived items and Systems are refused, as is an item in
+    /// the wrong state (checking out one that's already out, and so on).
+    async fn change_owner(
+        &self,
+        ctx: &WriteContext,
+        asset_ids: &[Id],
+        change: OwnerChange,
+    ) -> Result<Vec<Asset>>;
+    /// Waiting check-out requests (oldest first), then those decided since the filter's date
+    /// (newest first).
+    async fn list_owner_requests(&self, filter: &OwnerRequestFilter) -> Result<Vec<OwnerRequest>>;
+    /// Asks for Instruments to be checked out or transferred (not checked in), one request
+    /// per item, all or none. Refused for an item in the wrong state, as `change_owner`
+    /// would refuse it, or that already has a request waiting.
+    async fn request_owner_change(
+        &self,
+        ctx: &WriteContext,
+        asset_ids: &[Id],
+        change: OwnerChange,
+        note: Option<String>,
+    ) -> Result<Vec<OwnerRequest>>;
+    async fn get_owner_request(&self, id: Id) -> Result<OwnerRequest>;
+    /// Approves (making the change, as `change_owner`) or declines a waiting request.
+    async fn decide_owner_request(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        approve: bool,
+        note: Option<String>,
+    ) -> Result<OwnerRequest>;
+    /// Withdraws a waiting request. Who may do this is checked by the caller.
+    async fn cancel_owner_request(&self, ctx: &WriteContext, id: Id) -> Result<OwnerRequest>;
     /// Moves Instruments into a System (e.g. when the System is created), each audited as
     /// an edit of the Instrument. Archived items and Systems can't be added. Like any
     /// Instrument in a System, they take the System's location and department (as they do

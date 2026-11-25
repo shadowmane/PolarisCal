@@ -7,7 +7,11 @@ import type { StatusRole } from "./StatusRole";
 /**
  * An Instrument or System, with the display names of its lookups joined in.
  */
-export type Asset = { id: number, asset_tag: string, kind: AssetKind, parent_id: number | null, parent_tag: string | null, description: string, manufacturer_id: number | null, manufacturer_name: string | null, model_number: string | null, serial_number: string | null, location_id: number | null, location_name: string | null, department_id: number | null, department_name: string | null, owner_id: number | null, owner_name: string | null, status_id: number, status_name: string, 
+export type Asset = { id: number, asset_tag: string, kind: AssetKind, parent_id: number | null, parent_tag: string | null, description: string, manufacturer_id: number | null, manufacturer_name: string | null, model_number: string | null, serial_number: string | null, location_id: number | null, location_name: string | null, department_id: number | null, department_name: string | null, owner_id: number | null, owner_name: string | null, 
+/**
+ * When the item was checked out to its owner (unknown for older assignments).
+ */
+owner_since: string | null, status_id: number, status_name: string, 
 /**
  * Set when the item's status is a built-in one (e.g. Out for Repair).
  */

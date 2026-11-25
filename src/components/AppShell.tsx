@@ -12,6 +12,7 @@ import {
   ListChecks,
   LogOut,
   Moon,
+  PackageCheck,
   Settings,
   Sparkle,
   Sun,
@@ -26,6 +27,7 @@ import { useAuth } from "../lib/auth";
 import { type Permission, roleMeta } from "../lib/permissions";
 import { setCurrencySymbol } from "../lib/currency";
 import { setDateFormat } from "../lib/dates";
+import { usePendingOwnerRequestCount } from "../lib/ownerRequests";
 import { useResetRequestCount } from "../lib/resetRequests";
 import { useTheme } from "../lib/theme";
 import { setNoticeDismissed, useAvailableUpdate, useNoticeDismissed } from "../lib/updates";
@@ -45,6 +47,7 @@ interface NavItem {
 const MAIN_NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/assets", label: "Instruments & Systems", icon: Gauge },
+  { to: "/inventory", label: "Available Inventory", icon: PackageCheck },
   { to: "/calibrations", label: "Service Records", icon: ClipboardCheck },
   { to: "/certificates/new", label: "Generate Certificate", icon: FileBadge },
   { to: "/reports", label: "Reports", icon: FileChartColumn },
@@ -198,8 +201,19 @@ export function AppShell() {
       : item,
   );
   // Viewers can't generate certificates, but can look through the issued ones.
+  const ownerRequests = usePendingOwnerRequestCount(can("edit_records"));
   const mainNav = MAIN_NAV.map((item) =>
-    item.to === "/certificates/new" && !can("edit_records") ? { ...item, to: "/certificates", label: "Certificates" } : item,
+    item.to === "/certificates/new" && !can("edit_records")
+      ? { ...item, to: "/certificates", label: "Certificates" }
+      : item.to === "/inventory"
+        ? {
+            ...item,
+            badge: {
+              count: ownerRequests,
+              label: `${ownerRequests} check-out request${ownerRequests === 1 ? "" : "s"} waiting`,
+            },
+          }
+        : item,
   );
   const update = useAvailableUpdate();
   const noticeDismissed = useNoticeDismissed();

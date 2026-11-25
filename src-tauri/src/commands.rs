@@ -17,7 +17,8 @@ use polaris_core::auth::{
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentCategory, AttachmentFilter,
     AttachmentFolder, CalibrationFilter, CalibrationInput, CalibrationRecord, LastCost,
-    LookupInput, LookupItem, LookupKind, NewAttachment, StoreInfo,
+    LookupInput, LookupItem, LookupKind, NewAttachment, OwnerChange, OwnerRequest,
+    OwnerRequestFilter, StoreInfo,
 };
 use polaris_core::schedule::DueSummary;
 use polaris_core::{Error, FieldError, Id, Store};
@@ -648,6 +649,86 @@ pub async fn add_to_system(
     Ok(store
         .add_to_system(&ctx(&me, None), system_id, &instrument_ids)
         .await?)
+}
+
+/// Checks Instruments out to an owner, back in, or over to another owner.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn change_owner(
+    state: State<'_, AppState>,
+    asset_ids: Vec<Id>,
+    change: OwnerChange,
+    reason: Option<String>,
+) -> CmdResult<Vec<Asset>> {
+    let (store, me) = require(&state, Need::Editor).await?;
+    let reason = reason
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty());
+    Ok(store
+        .change_owner(&ctx(&me, reason), &asset_ids, change)
+        .await?)
+}
+
+/// Waiting check-out requests, and recently decided ones. Everyone can see them.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn list_owner_requests(
+    state: State<'_, AppState>,
+    filter: OwnerRequestFilter,
+) -> CmdResult<Vec<OwnerRequest>> {
+    let (store, _) = require(&state, Need::SignedIn).await?;
+    Ok(store.list_owner_requests(&filter).await?)
+}
+
+/// Asks for Instruments to be checked out or transferred. Anyone signed in can ask;
+/// a Technician or Administrator approves it.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn request_owner_change(
+    state: State<'_, AppState>,
+    asset_ids: Vec<Id>,
+    change: OwnerChange,
+    note: Option<String>,
+) -> CmdResult<Vec<OwnerRequest>> {
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    Ok(store
+        .request_owner_change(&ctx(&me, None), &asset_ids, change, note)
+        .await?)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn decide_owner_request(
+    state: State<'_, AppState>,
+    id: Id,
+    approve: bool,
+    note: Option<String>,
+) -> CmdResult<OwnerRequest> {
+    let (store, me) = require(&state, Need::Editor).await?;
+    Ok(store
+        .decide_owner_request(&ctx(&me, None), id, approve, note)
+        .await?)
+}
+
+/// The person who asked can withdraw their request, as can a Technician or Administrator.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cancel_owner_request(state: State<'_, AppState>, id: Id) -> CmdResult<OwnerRequest> {
+    let (store, me) = require(&state, Need::SignedIn).await?;
+    let request = store.get_owner_request(id).await?;
+    if request.requested_by_id != Some(me.id) && !me.role.can_edit_records() {
+        return Err(CommandError::new(
+            ErrorKind::Forbidden,
+            "Only the person who asked, or a Technician or Administrator, can cancel this request.",
+        ));
+    }
+    Ok(store.cancel_owner_request(&ctx(&me, None), id).await?)
+}
+
+/// How many check-out requests are waiting, for the badge Technicians and Administrators
+/// see. Checked in the background, so it doesn't count as activity.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pending_owner_requests(state: State<'_, AppState>) -> CmdResult<usize> {
+    let (store, _) = require_passive(&state, Need::Editor).await?;
+    Ok(store
+        .list_owner_requests(&OwnerRequestFilter::default())
+        .await?
+        .len())
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -221,7 +221,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 18);
+    assert_eq!(info.schema_version, 20);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -2301,6 +2301,328 @@ fn files_go_to_their_types_folder_or_the_certificates_folder() {
     assert_eq!(
         AttachmentCategory::ServiceManual.folder(),
         AttachmentFolder::ServiceManuals
+    );
+}
+
+#[tokio::test]
+async fn instruments_check_out_transfer_and_check_in() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let owner = |name: &'static str| async move {
+        s.create_lookup(&ctx(), LookupKind::Owner, lookup(name))
+            .await
+            .unwrap()
+            .id
+    };
+    let (dana, jordan) = (owner("Dana Reyes").await, owner("Jordan Kim").await);
+    let a = s
+        .create_asset(&ctx(), asset_input(s, "CO-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let b = s
+        .create_asset(&ctx(), asset_input(s, "CO-2", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    assert_eq!((a.owner_id, a.owner_since), (None, None));
+
+    // Check out both at once.
+    let out = s
+        .change_owner(
+            &ctx(),
+            &[a.id, b.id],
+            OwnerChange::CheckOut { owner_id: dana },
+        )
+        .await
+        .unwrap();
+    assert_eq!(out.len(), 2);
+    assert!(
+        out.iter()
+            .all(|x| x.owner_id == Some(dana) && x.owner_since.is_some())
+    );
+
+    // Already out: checking out again is refused, and nothing changes (all or none).
+    let c = s
+        .create_asset(&ctx(), asset_input(s, "CO-3", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let refused = s
+        .change_owner(
+            &ctx(),
+            &[c.id, a.id],
+            OwnerChange::CheckOut { owner_id: jordan },
+        )
+        .await;
+    assert!(matches!(refused, Err(Error::Conflict(ref m)) if m.contains("Transfer it instead")));
+    assert_eq!(s.get_asset(c.id).await.unwrap().owner_id, None);
+
+    // Transfer one to Jordan; transferring to the same person again is refused.
+    let moved = s
+        .change_owner(&ctx(), &[a.id], OwnerChange::Transfer { owner_id: jordan })
+        .await
+        .unwrap();
+    assert_eq!(moved[0].owner_name.as_deref(), Some("Jordan Kim"));
+    assert!(
+        s.change_owner(&ctx(), &[a.id], OwnerChange::Transfer { owner_id: jordan })
+            .await
+            .is_err()
+    );
+    // Can't transfer or check in what isn't out.
+    assert!(
+        s.change_owner(&ctx(), &[c.id], OwnerChange::Transfer { owner_id: dana })
+            .await
+            .is_err()
+    );
+    assert!(
+        s.change_owner(&ctx(), &[c.id], OwnerChange::CheckIn)
+            .await
+            .is_err()
+    );
+
+    // Check in.
+    let back = s
+        .change_owner(&ctx(), &[a.id, b.id], OwnerChange::CheckIn)
+        .await
+        .unwrap();
+    assert!(
+        back.iter()
+            .all(|x| x.owner_id.is_none() && x.owner_since.is_none())
+    );
+
+    // Systems, archived items, and unknown owners are refused.
+    let sys = s
+        .create_asset(&ctx(), asset_input(s, "CO-SYS", AssetKind::System).await)
+        .await
+        .unwrap();
+    assert!(
+        s.change_owner(&ctx(), &[sys.id], OwnerChange::CheckOut { owner_id: dana })
+            .await
+            .is_err()
+    );
+    assert!(
+        s.change_owner(&ctx(), &[c.id], OwnerChange::CheckOut { owner_id: 99_999 })
+            .await
+            .is_err()
+    );
+
+    // Each step is in the item's history, with the reason.
+    let reasoned = WriteContext::new(ctx().actor, Some("Field job at plant 2".into()));
+    s.change_owner(&reasoned, &[c.id], OwnerChange::CheckOut { owner_id: dana })
+        .await
+        .unwrap();
+    let history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(a.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let actions: Vec<_> = history.iter().map(|e| e.action).take(3).collect();
+    assert_eq!(
+        actions,
+        [
+            AuditAction::CheckIn,
+            AuditAction::Transfer,
+            AuditAction::CheckOut
+        ]
+    );
+    assert!(history[1].changes.iter().any(|ch| ch.field == "Owner"
+        && ch.old.as_deref() == Some("Dana Reyes")
+        && ch.new.as_deref() == Some("Jordan Kim")));
+    let c_history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(c.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(c_history[0].reason.as_deref(), Some("Field job at plant 2"));
+
+    // Choosing an owner on the edit form stamps the date too.
+    let mut input = asset_input(s, "CO-4", AssetKind::Instrument).await;
+    input.owner_id = Some(jordan);
+    assert!(
+        s.create_asset(&ctx(), input)
+            .await
+            .unwrap()
+            .owner_since
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn viewers_request_check_outs_that_technicians_approve_or_decline() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let viewer = s
+        .create_user(&ctx(), new_user("vlee", Role::Viewer))
+        .await
+        .unwrap();
+    let as_viewer = WriteContext::new(
+        Actor {
+            user_id: viewer.id,
+            username: viewer.username.clone(),
+        },
+        None,
+    );
+    let owner = |name: &'static str| async move {
+        s.create_lookup(&ctx(), LookupKind::Owner, lookup(name))
+            .await
+            .unwrap()
+            .id
+    };
+    let (val, jordan) = (owner("Val Lee").await, owner("Jordan Kim").await);
+    let a = s
+        .create_asset(&ctx(), asset_input(s, "RQ-1", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let b = s
+        .create_asset(&ctx(), asset_input(s, "RQ-2", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+
+    // A viewer asks for A to be checked out to them.
+    let asked = s
+        .request_owner_change(
+            &as_viewer,
+            &[a.id],
+            OwnerChange::CheckOut { owner_id: val },
+            Some(" Site visit ".into()),
+        )
+        .await
+        .unwrap();
+    let req = &asked[0];
+    assert_eq!(req.status, OwnerRequestStatus::Pending);
+    assert_eq!(
+        (req.kind, req.owner_name.as_str(), req.requested_by.as_str()),
+        (OwnerRequestKind::CheckOut, "Val Lee", "vlee")
+    );
+    assert_eq!(req.note.as_deref(), Some("Site visit"));
+    assert_eq!(
+        s.get_asset(a.id).await.unwrap().owner_id,
+        None,
+        "not until approved"
+    );
+
+    // One waiting request per item; check-in can't be requested.
+    assert!(matches!(
+        s.request_owner_change(
+            &as_viewer,
+            &[a.id],
+            OwnerChange::CheckOut { owner_id: jordan },
+            None
+        )
+        .await,
+        Err(Error::Conflict(_))
+    ));
+    assert!(
+        s.request_owner_change(&as_viewer, &[b.id], OwnerChange::CheckIn, None)
+            .await
+            .is_err()
+    );
+    let waiting = s
+        .list_owner_requests(&OwnerRequestFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(waiting.iter().map(|r| r.id).collect::<Vec<_>>(), [req.id]);
+
+    // Approved: the item is checked out, recorded with who asked.
+    let approved = s
+        .decide_owner_request(&ctx(), req.id, true, Some("OK".into()))
+        .await
+        .unwrap();
+    assert_eq!(approved.status, OwnerRequestStatus::Approved);
+    assert_eq!(approved.decided_by.as_deref(), Some("admin"));
+    assert_eq!(approved.current_owner_name.as_deref(), Some("Val Lee"));
+    assert_eq!(s.get_asset(a.id).await.unwrap().owner_id, Some(val));
+    let history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(a.id),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(history[0].action, AuditAction::CheckOut);
+    assert_eq!(
+        history[0].reason.as_deref(),
+        Some("Requested by vlee: Site visit. Approved: OK")
+    );
+    assert_eq!(history[1].action, AuditAction::Request);
+    assert_eq!(history[1].username, "vlee");
+    // Deciding twice is refused.
+    assert!(
+        s.decide_owner_request(&ctx(), req.id, false, None)
+            .await
+            .is_err()
+    );
+
+    // A transfer request, declined: nothing changes.
+    let t = s
+        .request_owner_change(
+            &as_viewer,
+            &[a.id],
+            OwnerChange::Transfer { owner_id: jordan },
+            None,
+        )
+        .await
+        .unwrap();
+    let declined = s
+        .decide_owner_request(&ctx(), t[0].id, false, Some("Needed here".into()))
+        .await
+        .unwrap();
+    assert_eq!(declined.status, OwnerRequestStatus::Declined);
+    assert_eq!(declined.decision_note.as_deref(), Some("Needed here"));
+    assert_eq!(s.get_asset(a.id).await.unwrap().owner_id, Some(val));
+
+    // Cancelled by the person who asked.
+    let c = s
+        .request_owner_change(
+            &as_viewer,
+            &[b.id],
+            OwnerChange::CheckOut { owner_id: val },
+            None,
+        )
+        .await
+        .unwrap();
+    let cancelled = s.cancel_owner_request(&as_viewer, c[0].id).await.unwrap();
+    assert_eq!(cancelled.status, OwnerRequestStatus::Cancelled);
+
+    // Recently decided ones are listed when asked for, after the waiting ones.
+    let since = chrono::Utc::now() - chrono::Duration::days(30);
+    let recent = s
+        .list_owner_requests(&OwnerRequestFilter {
+            asset_id: None,
+            decided_since: Some(since),
+        })
+        .await
+        .unwrap();
+    assert_eq!(recent.len(), 3);
+    assert!(
+        s.list_owner_requests(&OwnerRequestFilter::default())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A request that's no longer possible can't be approved, and stays waiting.
+    let stale = s
+        .request_owner_change(
+            &as_viewer,
+            &[b.id],
+            OwnerChange::CheckOut { owner_id: val },
+            None,
+        )
+        .await
+        .unwrap();
+    s.change_owner(&ctx(), &[b.id], OwnerChange::CheckOut { owner_id: jordan })
+        .await
+        .unwrap();
+    assert!(matches!(
+        s.decide_owner_request(&ctx(), stale[0].id, true, None).await,
+        Err(Error::Conflict(ref m)) if m.contains("already checked out")
+    ));
+    assert_eq!(
+        s.get_owner_request(stale[0].id).await.unwrap().status,
+        OwnerRequestStatus::Pending
     );
 }
 

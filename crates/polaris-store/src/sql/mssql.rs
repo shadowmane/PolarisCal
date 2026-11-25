@@ -342,6 +342,16 @@ const MIGRATIONS: &[(i64, &str, &str)] = &[
         "attachment folders",
         include_str!("../../migrations/mssql/0018_attachment_folders.sql"),
     ),
+    (
+        19,
+        "check out",
+        include_str!("../../migrations/mssql/0019_check_out.sql"),
+    ),
+    (
+        20,
+        "owner requests",
+        include_str!("../../migrations/mssql/0020_owner_requests.sql"),
+    ),
 ];
 
 pub(crate) const VERSION_TABLE: &str = "polaris_schema_migrations";

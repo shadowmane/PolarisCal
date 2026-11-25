@@ -21,7 +21,8 @@ use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, AssetKind, Attachment, AttachmentFilter,
     AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationFilter, CalibrationInput,
     CalibrationRecord, ConditionReturned, LastCost, LookupInput, LookupItem, LookupKind,
-    NewAttachment, Role, StatusRole, StoreInfo,
+    NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, OwnerRequestKind,
+    OwnerRequestStatus, Role, StatusRole, StoreInfo,
 };
 use polaris_core::schedule::{
     add_interval, apply_extension, derive_dates, due_status_with_extension,
@@ -323,7 +324,7 @@ macro_rules! asset_select {
                 a.manufacturer_id, m.name AS manufacturer_name, a.model_number, a.serial_number,
                 a.location_id, l.name AS location_name,
                 a.department_id, d.name AS department_name,
-                a.owner_id, o.name AS owner_name,
+                a.owner_id, o.name AS owner_name, a.owner_since,
                 a.status_id, s.name AS status_name, s.tracks_due AS status_tracks_due,
                 s.builtin_role AS status_role, a.previous_status_id,
                 a.warranty_end_date, a.cal_interval_value, a.cal_interval_unit, a.cal_interval_end_of_month,
@@ -377,6 +378,7 @@ fn map_asset(row: &Row, today: NaiveDate) -> Result<Asset> {
         department_name: row.get("department_name")?,
         owner_id: row.get("owner_id")?,
         owner_name: row.get("owner_name")?,
+        owner_since: row.get("owner_since")?,
         status_id: row.get("status_id")?,
         status_name: row.get("status_name")?,
         status_role: role_from(row)?,
@@ -1215,6 +1217,207 @@ fn certificate_snapshot(c: &Certificate) -> Snapshot {
         ("Calibration date", Some(d.cal_date.to_string())),
         ("Next calibration", d.next_cal_date.map(|n| n.to_string())),
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Check-out
+// ---------------------------------------------------------------------------
+
+fn unique_ids(ids: &[Id]) -> Result<Vec<Id>> {
+    let mut ids = ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Err(Error::validation(
+            "asset_ids",
+            "Choose at least one instrument.",
+        ));
+    }
+    Ok(ids)
+}
+
+/// The owner an item is going to must exist and be active. Returns their name.
+async fn check_new_owner(conn: &mut Conn, owner_id: Id) -> Result<String> {
+    let row = conn
+        .fetch_optional(
+            "SELECT name, is_active FROM owners WHERE id = ?1",
+            params![owner_id],
+        )
+        .await?
+        .ok_or_else(|| Error::validation("owner_id", "Choose who it's going to."))?;
+    if !row.get::<bool>("is_active")? {
+        return Err(Error::validation(
+            "owner_id",
+            "That owner is inactive. Choose another, or make them active in Lists.",
+        ));
+    }
+    row.get("name")
+}
+
+/// Whether `change` can be made to this item as it is now.
+fn check_owner_change(asset: &Asset, change: OwnerChange) -> Result<()> {
+    let tag = &asset.asset_tag;
+    if asset.kind == AssetKind::System {
+        return Err(Error::validation(
+            "asset_ids",
+            format!("{tag} is a System. Check out its Instruments instead."),
+        ));
+    }
+    if asset.is_archived {
+        return Err(Error::validation(
+            "asset_ids",
+            format!("{tag} is archived. Restore it first."),
+        ));
+    }
+    let holder = asset.owner_name.clone().unwrap_or_default();
+    let problem = match (change, asset.owner_id) {
+        (OwnerChange::CheckOut { .. }, Some(_)) => Some(format!(
+            "{tag} is already checked out to {holder}. Transfer it instead."
+        )),
+        (OwnerChange::CheckIn, None) => Some(format!("{tag} isn't checked out.")),
+        (OwnerChange::Transfer { .. }, None) => {
+            Some(format!("{tag} isn't checked out. Check it out instead."))
+        }
+        (OwnerChange::Transfer { owner_id }, Some(current)) if current == owner_id => {
+            Some(format!("{tag} is already checked out to {holder}."))
+        }
+        _ => None,
+    };
+    match problem {
+        Some(message) => Err(Error::Conflict(message)),
+        None => Ok(()),
+    }
+}
+
+/// Makes the change to every item (or fails for all), each audited on the item.
+async fn apply_owner_change(
+    conn: &mut Conn,
+    ctx: &WriteContext,
+    asset_ids: &[Id],
+    change: OwnerChange,
+) -> Result<Vec<Asset>> {
+    let ids = unique_ids(asset_ids)?;
+    let (new_owner, action) = match change {
+        OwnerChange::CheckOut { owner_id } => (Some(owner_id), AuditAction::CheckOut),
+        OwnerChange::CheckIn => (None, AuditAction::CheckIn),
+        OwnerChange::Transfer { owner_id } => (Some(owner_id), AuditAction::Transfer),
+    };
+    if let Some(owner_id) = new_owner {
+        check_new_owner(conn, owner_id).await?;
+    }
+    let stamp = now();
+    let mut changed = Vec::with_capacity(ids.len());
+    for id in ids {
+        let before = fetch_asset(conn, id).await?;
+        check_owner_change(&before, change)?;
+        conn.execute(
+            "UPDATE assets SET owner_id = ?2, owner_since = ?3, updated_at = ?4,
+                               row_version = row_version + 1
+             WHERE id = ?1",
+            params![id, new_owner, new_owner.map(|_| stamp), stamp],
+        )
+        .await?;
+        let after = fetch_asset(conn, id).await?;
+        write_audit(
+            conn,
+            NewAuditEntry::by(ctx, action, AuditEntity::Asset)
+                .subject(id, &after.asset_tag)
+                .asset(id)
+                .changes(diff(&asset_snapshot(&before), &asset_snapshot(&after))),
+        )
+        .await?;
+        changed.push(after);
+    }
+    Ok(changed)
+}
+
+fn request_label(kind: OwnerRequestKind, owner: &str) -> String {
+    match kind {
+        OwnerRequestKind::CheckOut => format!("Check out to {owner}"),
+        OwnerRequestKind::Transfer => format!("Transfer to {owner}"),
+    }
+}
+
+macro_rules! owner_request_select {
+    () => {
+        "SELECT r.id, r.asset_id, a.asset_tag, a.description AS asset_description, r.kind,
+                r.owner_id, o.name AS owner_name, co.name AS current_owner_name,
+                r.requested_by_id, r.requested_by, r.note, r.status, r.decided_by, r.decided_at,
+                r.decision_note, r.created_at
+         FROM owner_requests r
+         JOIN assets a       ON a.id = r.asset_id
+         JOIN owners o       ON o.id = r.owner_id
+         LEFT JOIN owners co ON co.id = a.owner_id"
+    };
+}
+
+fn map_owner_request(row: &Row) -> Result<OwnerRequest> {
+    Ok(OwnerRequest {
+        id: row.get("id")?,
+        asset_id: row.get("asset_id")?,
+        asset_tag: row.get("asset_tag")?,
+        asset_description: row.get("asset_description")?,
+        kind: row.get::<String>("kind")?.parse()?,
+        owner_id: row.get("owner_id")?,
+        owner_name: row.get("owner_name")?,
+        current_owner_name: row.get("current_owner_name")?,
+        requested_by_id: row.get("requested_by_id")?,
+        requested_by: row.get("requested_by")?,
+        note: row.get("note")?,
+        status: row.get::<String>("status")?.parse()?,
+        decided_by: row.get("decided_by")?,
+        decided_at: row.get("decided_at")?,
+        decision_note: row.get("decision_note")?,
+        created_at: row.get("created_at")?,
+    })
+}
+
+async fn fetch_owner_request(conn: &mut Conn, id: Id) -> Result<OwnerRequest> {
+    const SQL: &str = concat!(owner_request_select!(), " WHERE r.id = ?1");
+    let row = conn
+        .fetch_optional(SQL, params![id])
+        .await?
+        .ok_or(Error::NotFound {
+            entity: "request",
+            id,
+        })?;
+    map_owner_request(&row)
+}
+
+fn require_pending(request: &OwnerRequest) -> Result<()> {
+    if request.status == OwnerRequestStatus::Pending {
+        Ok(())
+    } else {
+        Err(Error::Conflict(format!(
+            "This request was already {}.",
+            request.status
+        )))
+    }
+}
+
+async fn close_owner_request(
+    conn: &mut Conn,
+    ctx: &WriteContext,
+    id: Id,
+    status: OwnerRequestStatus,
+    note: &Option<String>,
+) -> Result<()> {
+    let stamp = now();
+    conn.execute(
+        "UPDATE owner_requests SET status = ?2, decided_by_id = ?3, decided_by = ?4,
+                                   decided_at = ?5, decision_note = ?6, updated_at = ?5
+         WHERE id = ?1 AND status = 'pending'",
+        params![
+            id,
+            status.as_str(),
+            ctx.actor.user_id,
+            &ctx.actor.username,
+            stamp,
+            note
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -2144,8 +2347,8 @@ impl Store for SqlStore {
                     location_id, department_id, owner_id, status_id, warranty_end_date,
                     cal_interval_value, cal_interval_unit, in_service_date,
                     first_cal_date, last_cal_date, next_cal_date, notes, created_at, updated_at,
-                    last_cal_date_entered, cal_interval_end_of_month, cal_aggregate)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, ?21, ?22, ?23)",
+                    last_cal_date_entered, cal_interval_end_of_month, cal_aggregate, owner_since)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?20, ?21, ?22, ?23, ?24)",
                 params![
                     &input.asset_tag,
                     input.kind.as_str(),
@@ -2169,7 +2372,8 @@ impl Store for SqlStore {
                     now(),
                     input.last_cal_date,
                     input.cal_interval.is_some_and(|i| i.end_of_month),
-                    input.cal_aggregate
+                    input.cal_aggregate,
+                    input.owner_id.map(|_| now())
                 ],
             )
             .await
@@ -2200,6 +2404,12 @@ impl Store for SqlStore {
         check_hierarchy(&mut tx, Some(id), &input).await?;
         inherit_from_system(&mut tx, &mut input).await?;
         let before = fetch_asset(&mut tx, id).await?;
+        // A new owner from the edit form counts as checking it out to them now.
+        let owner_since = if input.owner_id == before.owner_id {
+            before.owner_since
+        } else {
+            input.owner_id.map(|_| now())
+        };
 
         let changed = tx
             .execute(
@@ -2209,7 +2419,8 @@ impl Store for SqlStore {
                     owner_id = ?12, status_id = ?13, warranty_end_date = ?14,
                     cal_interval_value = ?15, cal_interval_unit = ?16, in_service_date = ?17,
                     first_cal_date = ?18, last_cal_date_entered = ?19, notes = ?20, updated_at = ?21,
-                    cal_interval_end_of_month = ?22, cal_aggregate = ?23, row_version = row_version + 1
+                    cal_interval_end_of_month = ?22, cal_aggregate = ?23, owner_since = ?24,
+                    row_version = row_version + 1
                  WHERE id = ?1 AND row_version = ?2",
                 params![
                     id,
@@ -2234,7 +2445,8 @@ impl Store for SqlStore {
                     &input.notes,
                     now(),
                     input.cal_interval.is_some_and(|i| i.end_of_month),
-                    input.cal_aggregate
+                    input.cal_aggregate,
+                    owner_since
                 ],
             )
             .await
@@ -2265,6 +2477,216 @@ impl Store for SqlStore {
         }
         tx.commit().await?;
         Ok(after)
+    }
+
+    async fn change_owner(
+        &self,
+        ctx: &WriteContext,
+        asset_ids: &[Id],
+        change: OwnerChange,
+    ) -> Result<Vec<Asset>> {
+        let mut tx = self.begin().await?;
+        let changed = apply_owner_change(&mut tx, ctx, asset_ids, change).await?;
+        tx.commit().await?;
+        Ok(changed)
+    }
+
+    async fn list_owner_requests(&self, filter: &OwnerRequestFilter) -> Result<Vec<OwnerRequest>> {
+        const SQL: &str = concat!(
+            owner_request_select!(),
+            " WHERE (?1 IS NULL OR r.asset_id = ?1)
+                AND (r.status = 'pending' OR (?2 IS NOT NULL AND r.decided_at >= ?2))"
+        );
+        let mut requests = self
+            .conn()
+            .await?
+            .fetch_all(SQL, params![filter.asset_id, filter.decided_since])
+            .await?
+            .iter()
+            .map(map_owner_request)
+            .collect::<Result<Vec<_>>>()?;
+        // Waiting ones first, oldest first (a queue); then decided ones, newest first.
+        requests.sort_by(|a, b| {
+            let waiting = |r: &OwnerRequest| r.status != OwnerRequestStatus::Pending;
+            waiting(a).cmp(&waiting(b)).then_with(|| {
+                if a.status == OwnerRequestStatus::Pending {
+                    (a.created_at, a.id).cmp(&(b.created_at, b.id))
+                } else {
+                    (b.decided_at, b.id).cmp(&(a.decided_at, a.id))
+                }
+            })
+        });
+        Ok(requests)
+    }
+
+    async fn get_owner_request(&self, id: Id) -> Result<OwnerRequest> {
+        fetch_owner_request(&mut self.conn().await?, id).await
+    }
+
+    async fn request_owner_change(
+        &self,
+        ctx: &WriteContext,
+        asset_ids: &[Id],
+        change: OwnerChange,
+        note: Option<String>,
+    ) -> Result<Vec<OwnerRequest>> {
+        let (kind, owner_id) = match change {
+            OwnerChange::CheckOut { owner_id } => (OwnerRequestKind::CheckOut, owner_id),
+            OwnerChange::Transfer { owner_id } => (OwnerRequestKind::Transfer, owner_id),
+            OwnerChange::CheckIn => {
+                return Err(Error::validation(
+                    "change",
+                    "Checking items in is done by a Technician or Administrator.",
+                ));
+            }
+        };
+        let ids = unique_ids(asset_ids)?;
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        let mut tx = self.begin().await?;
+        let owner_name = check_new_owner(&mut tx, owner_id).await?;
+        let stamp = now();
+        let mut created = Vec::with_capacity(ids.len());
+        for id in ids {
+            let asset = fetch_asset(&mut tx, id).await?;
+            check_owner_change(&asset, change)?;
+            let waiting = tx
+                .fetch_optional(
+                    "SELECT requested_by FROM owner_requests WHERE asset_id = ?1 AND status = 'pending'",
+                    params![id],
+                )
+                .await?
+                .map(|r| r.get::<String>("requested_by"))
+                .transpose()?;
+            if let Some(by) = waiting {
+                return Err(Error::Conflict(format!(
+                    "{} already has a request waiting (from {by}).",
+                    asset.asset_tag
+                )));
+            }
+            let request_id = tx
+                .insert(
+                    "INSERT INTO owner_requests (asset_id, kind, owner_id, requested_by_id,
+                                                 requested_by, note, status, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
+                    params![
+                        id,
+                        kind.as_str(),
+                        owner_id,
+                        ctx.actor.user_id,
+                        &ctx.actor.username,
+                        &note,
+                        stamp
+                    ],
+                )
+                .await?;
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(
+                    &WriteContext::new(ctx.actor.clone(), note.clone()),
+                    AuditAction::Request,
+                    AuditEntity::Asset,
+                )
+                .subject(id, &asset.asset_tag)
+                .asset(id)
+                .changes(vec![FieldChange {
+                    field: "Request".into(),
+                    old: None,
+                    new: Some(request_label(kind, &owner_name)),
+                }]),
+            )
+            .await?;
+            created.push(fetch_owner_request(&mut tx, request_id).await?);
+        }
+        tx.commit().await?;
+        Ok(created)
+    }
+
+    async fn decide_owner_request(
+        &self,
+        ctx: &WriteContext,
+        id: Id,
+        approve: bool,
+        note: Option<String>,
+    ) -> Result<OwnerRequest> {
+        let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+        let mut tx = self.begin().await?;
+        let request = fetch_owner_request(&mut tx, id).await?;
+        require_pending(&request)?;
+        if approve {
+            // The change itself, recorded on the item as a check-out or transfer, with who
+            // asked and why.
+            let mut reason = format!("Requested by {}", request.requested_by);
+            if let Some(n) = &request.note {
+                reason.push_str(&format!(": {n}"));
+            }
+            if let Some(n) = &note {
+                reason.push_str(&format!(". Approved: {n}"));
+            }
+            let approval = WriteContext::new(ctx.actor.clone(), Some(reason));
+            apply_owner_change(
+                &mut tx,
+                &approval,
+                &[request.asset_id],
+                request.kind.change(request.owner_id),
+            )
+            .await?;
+        } else {
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(
+                    &WriteContext::new(ctx.actor.clone(), note.clone()),
+                    AuditAction::Decline,
+                    AuditEntity::Asset,
+                )
+                .subject(request.asset_id, &request.asset_tag)
+                .asset(request.asset_id)
+                .changes(vec![FieldChange {
+                    field: "Request".into(),
+                    old: Some(format!(
+                        "{} (from {})",
+                        request_label(request.kind, &request.owner_name),
+                        request.requested_by
+                    )),
+                    new: Some("Declined".into()),
+                }]),
+            )
+            .await?;
+        }
+        let status = if approve {
+            OwnerRequestStatus::Approved
+        } else {
+            OwnerRequestStatus::Declined
+        };
+        close_owner_request(&mut tx, ctx, id, status, &note).await?;
+        let decided = fetch_owner_request(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(decided)
+    }
+
+    async fn cancel_owner_request(&self, ctx: &WriteContext, id: Id) -> Result<OwnerRequest> {
+        let mut tx = self.begin().await?;
+        let request = fetch_owner_request(&mut tx, id).await?;
+        require_pending(&request)?;
+        close_owner_request(&mut tx, ctx, id, OwnerRequestStatus::Cancelled, &None).await?;
+        write_audit(
+            &mut tx,
+            NewAuditEntry::by(ctx, AuditAction::Cancel, AuditEntity::Asset)
+                .subject(request.asset_id, &request.asset_tag)
+                .asset(request.asset_id)
+                .changes(vec![FieldChange {
+                    field: "Request".into(),
+                    old: Some(format!(
+                        "{} (from {})",
+                        request_label(request.kind, &request.owner_name),
+                        request.requested_by
+                    )),
+                    new: Some("Cancelled".into()),
+                }]),
+        )
+        .await?;
+        let cancelled = fetch_owner_request(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(cancelled)
     }
 
     async fn add_to_system(

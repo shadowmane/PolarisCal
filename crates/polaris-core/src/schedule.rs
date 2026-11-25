@@ -433,6 +433,7 @@ mod tests {
             status_name: "Active".into(),
             status_role: None,
             previous_status_id: None,
+            owner_since: None,
             cal_aggregate: false,
             warranty_end_date: None,
             cal_interval: interval,

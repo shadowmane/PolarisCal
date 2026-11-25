@@ -163,6 +163,18 @@ text_enum!(
         PasswordResetRequest => "password_reset_request",
         /// A password reached the end of its life at sign-in and must be changed.
         PasswordExpired => "password_expired",
+        /// An item was checked out to someone (its Owner set).
+        CheckOut => "check_out",
+        /// An item was checked back in (its Owner cleared).
+        CheckIn => "check_in",
+        /// An item went from one owner straight to another.
+        Transfer => "transfer",
+        /// Someone asked for an item to be checked out or transferred.
+        Request => "request",
+        /// A Technician or Administrator declined such a request.
+        Decline => "decline",
+        /// The person who asked (or a Technician or Administrator) withdrew the request.
+        Cancel => "cancel",
         /// All data was copied from this database to another one.
         Export => "export",
         /// This database was filled with data copied from another one.
@@ -231,6 +243,80 @@ impl AttachmentCategory {
     }
 }
 
+/// Checking Instruments out (to an Owner), back in, or from one owner to another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "action", rename_all = "snake_case")]
+#[ts(export)]
+pub enum OwnerChange {
+    /// The items must not be checked out to anyone.
+    CheckOut { owner_id: Id },
+    /// The items must be checked out.
+    CheckIn,
+    /// The items must be checked out, to someone other than `owner_id`.
+    Transfer { owner_id: Id },
+}
+
+text_enum!(
+    /// What a check-out request asks for.
+    OwnerRequestKind {
+        CheckOut => "check_out",
+        Transfer => "transfer",
+    }
+);
+
+text_enum!(
+    /// Where a check-out request stands.
+    OwnerRequestStatus {
+        Pending => "pending",
+        Approved => "approved",
+        Declined => "declined",
+        Cancelled => "cancelled",
+    }
+);
+
+impl OwnerRequestKind {
+    /// The change approving the request makes.
+    pub fn change(self, owner_id: Id) -> OwnerChange {
+        match self {
+            Self::CheckOut => OwnerChange::CheckOut { owner_id },
+            Self::Transfer => OwnerChange::Transfer { owner_id },
+        }
+    }
+}
+
+/// A request for an Instrument to be checked out or transferred, waiting for (or decided
+/// by) a Technician or Administrator.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[ts(export)]
+pub struct OwnerRequest {
+    pub id: Id,
+    pub asset_id: Id,
+    pub asset_tag: String,
+    pub asset_description: String,
+    pub kind: OwnerRequestKind,
+    /// Who it should go to.
+    pub owner_id: Id,
+    pub owner_name: String,
+    /// Who has the item now.
+    pub current_owner_name: Option<String>,
+    pub requested_by_id: Option<Id>,
+    pub requested_by: String,
+    pub note: Option<String>,
+    pub status: OwnerRequestStatus,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<DateTime<Utc>>,
+    pub decision_note: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Waiting requests, plus those decided since `decided_since` when it's given.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OwnerRequestFilter {
+    pub asset_id: Option<Id>,
+    pub decided_since: Option<DateTime<Utc>>,
+}
+
 /// How often an item must be calibrated, e.g. 12 months.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -263,6 +349,8 @@ pub struct Asset {
     pub department_name: Option<String>,
     pub owner_id: Option<Id>,
     pub owner_name: Option<String>,
+    /// When the item was checked out to its owner (unknown for older assignments).
+    pub owner_since: Option<DateTime<Utc>>,
     pub status_id: Id,
     pub status_name: String,
     /// Set when the item's status is a built-in one (e.g. Out for Repair).

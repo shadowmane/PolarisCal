@@ -32,6 +32,7 @@ function asset(id: number, tag: string, over: Partial<Asset> = {}): Asset {
     department_name: null,
     owner_id: null,
     owner_name: null,
+    owner_since: null,
     status_id: 1,
     status_name: "Active",
     status_role: null,
