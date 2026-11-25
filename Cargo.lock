@@ -3400,7 +3400,7 @@ dependencies = [
 
 [[package]]
 name = "polaris-core"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "argon2",
  "async-trait",
@@ -3413,7 +3413,7 @@ dependencies = [
 
 [[package]]
 name = "polaris-store"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3430,7 +3430,7 @@ dependencies = [
 
 [[package]]
 name = "polariscal"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "base64 0.22.1",
  "chrono",
