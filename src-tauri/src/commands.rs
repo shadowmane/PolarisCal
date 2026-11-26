@@ -16,8 +16,8 @@ use polaris_core::auth::{
 };
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentCategory, AttachmentFilter,
-    AttachmentFolder, CalibrationFilter, CalibrationInput, CalibrationRecord, LastCost,
-    LookupInput, LookupItem, LookupKind, NewAttachment, OwnerChange, OwnerRequest,
+    AttachmentFolder, CalibrationFilter, CalibrationInput, CalibrationRecord, InvoiceInput,
+    LastCost, LookupInput, LookupItem, LookupKind, NewAttachment, OwnerChange, OwnerRequest,
     OwnerRequestFilter, OwnerRequestStatus, Reservation, ReservationCheck, ReservationFilter,
     ReservationStatus, StoreInfo,
 };
@@ -1005,6 +1005,16 @@ pub async fn update_calibration(
     Ok(store
         .update_calibration(&ctx(&me, reason), id, expected_version, input)
         .await?)
+}
+
+/// Billing: records an outside vendor's invoice against its service records.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn save_invoice(
+    state: State<'_, AppState>,
+    input: InvoiceInput,
+) -> CmdResult<Vec<CalibrationRecord>> {
+    let (store, me) = require(&state, Need::Editor).await?;
+    Ok(store.save_invoice(&ctx(&me, None), input).await?)
 }
 
 #[tauri::command(rename_all = "snake_case")]

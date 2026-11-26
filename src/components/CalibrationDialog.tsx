@@ -487,7 +487,22 @@ export function CalibrationDialog({
                     error={errors.cost_cents}
                     isDisabled={isExtension}
                   />
-                  <div />
+                  {record?.invoice_number ? (
+                    <div className="flex flex-col gap-1 text-sm">
+                      <span className="font-medium">Invoice</span>
+                      <span>
+                        {record.invoice_number} · line {record.invoice_line}
+                        {record.invoice_date && <span className="text-muted"> · {formatDate(record.invoice_date)}</span>}
+                      </span>
+                      <span className="text-xs text-muted">
+                        Entered on the Billing page.
+                        {(form.calibrated_by !== "provider" || form.calibrated_by_id !== record.calibrated_by_id) &&
+                          " Saving with a different performer takes it off this invoice."}
+                      </span>
+                    </div>
+                  ) : (
+                    <div />
+                  )}
                   <TextAreaInput
                     label="Notes"
                     value={form.notes}

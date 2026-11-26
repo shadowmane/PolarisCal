@@ -234,6 +234,9 @@ pub fn calibration_snapshot(r: &CalibrationRecord) -> Snapshot {
         ("Condition returned", Some(r.condition_returned.to_string())),
         ("Due date set", opt(&r.next_due_date)),
         ("Notes", r.notes.clone()),
+        ("Invoice", r.invoice_number.clone()),
+        ("Invoice line", r.invoice_line.map(|l| l.to_string())),
+        ("Invoice date", opt(&r.invoice_date)),
         ("Archived", yes_no(r.is_archived)),
     ]
 }

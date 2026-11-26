@@ -14,6 +14,7 @@ import {
   LogOut,
   Moon,
   PackageCheck,
+  ReceiptText,
   Settings,
   Sparkle,
   Sun,
@@ -42,6 +43,8 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** Shown only to roles with this permission. */
+  need?: Permission;
   /** A red count beside the label, with what it counts for screen readers. */
   badge?: { count: number; label: string };
 }
@@ -53,11 +56,11 @@ const MAIN_NAV: NavItem[] = [
   { to: "/reservations", label: "Reservations", icon: CalendarDays },
   { to: "/calibrations", label: "Service Records", icon: ClipboardCheck },
   { to: "/certificates/new", label: "Generate Certificate", icon: FileBadge },
+  { to: "/billing", label: "Billing", icon: ReceiptText, need: "edit_records" },
   { to: "/reports", label: "Reports", icon: FileChartColumn },
 ];
 
-/** `need`: shown only to roles with that permission. */
-const ADMIN_NAV: (NavItem & { need?: Permission })[] = [
+const ADMIN_NAV: NavItem[] = [
   { to: "/lists", label: "Lists", icon: ListChecks, need: "edit_records" },
   { to: "/users", label: "Users", icon: Users, need: "admin" },
   { to: "/audit", label: "Audit Log", icon: History, need: "admin" },
@@ -207,7 +210,7 @@ export function AppShell() {
   // Requests addressed to you (or, for Technicians and Administrators, to no one in particular).
   const ownerRequests = usePendingOwnerRequestCount(true);
   const reservationActions = useReservationActionCount(true);
-  const mainNav = MAIN_NAV.map((item) =>
+  const mainNav = MAIN_NAV.filter((item) => !item.need || can(item.need)).map((item) =>
     item.to === "/certificates/new" && !can("edit_records")
       ? { ...item, to: "/certificates", label: "Certificates" }
       : item.to === "/inventory"

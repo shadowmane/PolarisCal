@@ -613,6 +613,11 @@ pub struct CalibrationRecord {
     /// Due date this calibration established (cal date + the item's interval at the time).
     pub next_due_date: Option<NaiveDate>,
     pub notes: Option<String>,
+    /// The outside vendor's invoice this service was billed on (set on the Billing page).
+    pub invoice_number: Option<String>,
+    /// This record's line number on that invoice.
+    pub invoice_line: Option<i32>,
+    pub invoice_date: Option<NaiveDate>,
     /// Non-archived files attached to this record (certificates, data sheets).
     pub attachment_count: i64,
     pub is_archived: bool,
@@ -665,6 +670,75 @@ impl CalibrationInput {
         }
         if matches!(self.cost_cents, Some(c) if c < 0) {
             errors.push(FieldError::new("cost_cents", "Cost cannot be negative."));
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Validation(errors))
+        }
+    }
+}
+
+/// One line of an outside vendor's invoice: the service record it bills and what it charges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct InvoiceLine {
+    pub calibration_id: Id,
+    /// The service record's `row_version` when it was loaded.
+    pub expected_version: i64,
+    /// The line number on the invoice (1 or more, unique on the invoice).
+    pub line: i32,
+    /// What the invoice charges, in cents; becomes the record's cost.
+    pub cost_cents: i64,
+}
+
+/// An outside vendor's invoice: saving it puts exactly these service records on it (records
+/// that were on it before but aren't listed come off it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct InvoiceInput {
+    /// The calibration provider (an outside vendor) that sent the invoice.
+    pub provider_id: Id,
+    pub invoice_number: String,
+    pub invoice_date: NaiveDate,
+    pub lines: Vec<InvoiceLine>,
+}
+
+impl InvoiceInput {
+    pub fn normalize(&mut self) -> Result<()> {
+        let mut errors = Vec::new();
+        self.invoice_number = self.invoice_number.trim().to_string();
+        if self.invoice_number.is_empty() {
+            errors.push(FieldError::new(
+                "invoice_number",
+                "Enter the invoice number.",
+            ));
+        } else if self.invoice_number.chars().count() > 100 {
+            errors.push(FieldError::new(
+                "invoice_number",
+                "The invoice number can be at most 100 characters.",
+            ));
+        }
+        let mut lines = std::collections::HashSet::new();
+        let mut records = std::collections::HashSet::new();
+        for l in &self.lines {
+            if l.line < 1 {
+                errors.push(FieldError::new("lines", "Line numbers start at 1."));
+            } else if !lines.insert(l.line) {
+                errors.push(FieldError::new(
+                    "lines",
+                    format!("Line {} is used more than once.", l.line),
+                ));
+            }
+            if l.cost_cents < 0 {
+                errors.push(FieldError::new("lines", "A price cannot be negative."));
+            }
+            if !records.insert(l.calibration_id) {
+                errors.push(FieldError::new(
+                    "lines",
+                    "A service record can only be on an invoice once.",
+                ));
+            }
         }
         if errors.is_empty() {
             Ok(())

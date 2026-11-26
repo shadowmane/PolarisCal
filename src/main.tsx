@@ -13,6 +13,7 @@ import { CalibrationsPage } from "./pages/CalibrationsPage";
 import { CertificatePage, CertificatesPage } from "./pages/CertificatesPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { GenerateCertificatePage } from "./pages/GenerateCertificatePage";
+import { BillingPage } from "./pages/BillingPage";
 import { InventoryPage } from "./pages/InventoryPage";
 import { ListsPage } from "./pages/ListsPage";
 import { ReservationsPage } from "./pages/ReservationsPage";
@@ -43,6 +44,7 @@ const router = createHashRouter([
       { path: "users", element: <UsersPage /> },
       { path: "audit", element: <AuditPage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "billing", element: <BillingPage /> },
       { path: "reports", element: <ReportsPage /> },
       { path: "reports/labels", element: <LabelsPage /> },
       { path: "reports/history/:id", element: <HistoryReportPage /> },

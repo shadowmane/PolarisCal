@@ -11,6 +11,8 @@ import {
   addDays,
   dueReport,
   historyReport,
+  invoicedReport,
+  invoiceYears,
   isoToday,
   outOfToleranceReport,
   registerReport,
@@ -18,7 +20,7 @@ import {
 } from "../lib/reports";
 import { useAsync } from "../lib/useAsync";
 
-type ReportId = "due" | "oot" | "register";
+type ReportId = "due" | "oot" | "register" | "invoiced";
 
 const REPORTS: { id: ReportId; label: string; description: string }[] = [
   { id: "due", label: "Due and overdue", description: "What needs calibrating soon, soonest first." },
@@ -28,6 +30,11 @@ const REPORTS: { id: ReportId; label: string; description: string }[] = [
     description: "Service records where the item arrived out of tolerance or inoperative, for impact assessments.",
   },
   { id: "register", label: "Instrument register", description: "Every Instrument and System with its schedule." },
+  {
+    id: "invoiced",
+    label: "Invoiced calibrations",
+    description: "Service records billed on outside vendors' invoices (entered on the Billing page), by invoice and line.",
+  },
 ];
 
 const WINDOWS = [
@@ -61,14 +68,25 @@ export function ReportsPage() {
   const [to, setTo] = useState<string | null>(today);
   // Register
   const [includeArchived, setIncludeArchived] = useState(false);
+  // Invoiced calibrations: one vendor (or all) and the invoices' year (or all).
+  const [providerId, setProviderId] = useState<number | null>(null);
+  const [year, setYear] = useState<number | null>(new Date().getFullYear());
 
   const calibrations = useAsync(
     () =>
       report === "oot" && from && to
         ? api.listCalibrations({ from_date: from, to_date: to })
-        : Promise.resolve(null),
+        : report === "invoiced"
+          ? api.listCalibrations()
+          : Promise.resolve(null),
     [report, from, to],
   );
+  const vendors = (lookups.data?.provider ?? []).filter((p) => !p.is_internal);
+  const years = useMemo(() => {
+    const found = report === "invoiced" && calibrations.data ? invoiceYears(calibrations.data) : [];
+    const thisYear = new Date().getFullYear();
+    return [...new Set([thisYear, ...found, ...(year == null ? [] : [year])])].sort((a, b) => b - a);
+  }, [report, calibrations.data, year]);
 
   const table: ReportTable | null = useMemo(() => {
     const items = assets.data;
@@ -85,6 +103,10 @@ export function ReportsPage() {
       if (!from || !to || !calibrations.data) return null;
       return outOfToleranceReport(calibrations.data, items, from, to);
     }
+    if (report === "invoiced") {
+      if (!calibrations.data) return null;
+      return invoicedReport(calibrations.data, items, providerId, year, nameOf(l?.provider, providerId));
+    }
     const filtered = items.filter(
       (a) =>
         (locationId == null || a.location_id === locationId) &&
@@ -95,7 +117,7 @@ export function ReportsPage() {
       .filter(Boolean)
       .join(" · ");
     return registerReport(filtered, includeArchived, note);
-  }, [assets.data, lookups.data, report, withinDays, locationId, departmentId, ownerId, today, from, to, calibrations.data, includeArchived]);
+  }, [assets.data, lookups.data, report, withinDays, locationId, departmentId, ownerId, today, from, to, calibrations.data, includeArchived, providerId, year]);
 
   const meta = REPORTS.find((r) => r.id === report)!;
   const error = assets.error ?? calibrations.error;
@@ -142,7 +164,24 @@ export function ReportsPage() {
               isRequired
             />
           )}
-          {report === "oot" ? (
+          {report === "invoiced" ? (
+            <>
+              <SelectInput<number>
+                label="Calibration provider"
+                value={providerId}
+                onChange={setProviderId}
+                options={vendors.map((p) => ({ id: p.id, label: p.is_active ? p.name : `${p.name} (inactive)` }))}
+                placeholder="All outside vendors"
+              />
+              <SelectInput<number>
+                label="Year"
+                value={year}
+                onChange={setYear}
+                options={years.map((y) => ({ id: y, label: String(y) }))}
+                placeholder="All years"
+              />
+            </>
+          ) : report === "oot" ? (
             <>
               <DateInput label="From" value={from} onChange={setFrom} isRequired />
               <DateInput label="To" value={to} onChange={setTo} isRequired />
@@ -192,7 +231,9 @@ export function ReportsPage() {
               ? "Nothing is overdue or due in this period."
               : report === "oot"
                 ? "No items arrived out of tolerance or inoperative in this period."
-                : "No items match."
+                : report === "invoiced"
+                  ? "No invoiced service records match. Invoices are entered on the Billing page."
+                  : "No items match."
           }
         />
       )}

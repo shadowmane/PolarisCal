@@ -49,6 +49,14 @@ cost_cents: number | null, certificate_number: string | null, condition_received
  */
 next_due_date: string | null, notes: string | null, 
 /**
+ * The outside vendor's invoice this service was billed on (set on the Billing page).
+ */
+invoice_number: string | null, 
+/**
+ * This record's line number on that invoice.
+ */
+invoice_line: number | null, invoice_date: string | null, 
+/**
  * Non-archived files attached to this record (certificates, data sheets).
  */
 attachment_count: number, is_archived: boolean, row_version: number, created_at: string, updated_at: string, };

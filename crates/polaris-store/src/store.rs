@@ -20,8 +20,8 @@ use polaris_core::certificate::{
 use polaris_core::model::{
     AppSettings, Asset, AssetFilter, AssetInput, AssetKind, Attachment, AttachmentFilter,
     AuditAction, AuditEntity, CalInterval, CalibratedBy, CalibrationFilter, CalibrationInput,
-    CalibrationRecord, ConditionReturned, LastCost, LookupInput, LookupItem, LookupKind,
-    NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, OwnerRequestKind,
+    CalibrationRecord, ConditionReturned, InvoiceInput, LastCost, LookupInput, LookupItem,
+    LookupKind, NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, OwnerRequestKind,
     OwnerRequestStatus, Reservation, ReservationCheck, ReservationFilter, ReservationStatus, Role,
     StatusRole, StoreInfo,
 };
@@ -592,6 +592,7 @@ macro_rules! calibration_select {
                 COALESCE(p.name, m.name) AS calibrated_by_name,
                 r.technician, r.cost_cents, r.certificate_number,
                 r.condition_received, r.condition_returned, r.next_due_date, r.notes,
+                r.invoice_number, r.invoice_line, r.invoice_date,
                 (SELECT COUNT(*) FROM attachments f
                   WHERE f.calibration_id = r.id AND f.is_archived = FALSE) AS attachment_count,
                 r.is_archived, r.row_version, r.created_at, r.updated_at
@@ -633,6 +634,9 @@ fn map_calibration(row: &Row) -> Result<CalibrationRecord> {
         condition_returned: row.get::<String>("condition_returned")?.parse()?,
         next_due_date: row.get("next_due_date")?,
         notes: row.get("notes")?,
+        invoice_number: row.get("invoice_number")?,
+        invoice_line: row.get("invoice_line")?,
+        invoice_date: row.get("invoice_date")?,
         attachment_count: row.get("attachment_count")?,
         is_archived: row.get("is_archived")?,
         row_version: row.get("row_version")?,
@@ -3876,6 +3880,20 @@ impl Store for SqlStore {
                 missing_or_stale(&mut tx, "calibration_records", "calibration record", id).await,
             );
         }
+        // An invoice is the provider's: a record now performed by someone else comes off it.
+        let provider_now = calibrated_by_columns(&input).0;
+        if before.invoice_number.is_some()
+            && (before.calibrated_by != Some(CalibratedBy::Provider)
+                || before.calibrated_by_id != provider_now)
+        {
+            tx.execute(
+                "UPDATE calibration_records
+                 SET invoice_number = NULL, invoice_line = NULL, invoice_date = NULL
+                 WHERE id = ?1",
+                params![id],
+            )
+            .await?;
+        }
         recompute_asset_dates(&mut tx, input.asset_id).await?;
         let after = fetch_calibration(&mut tx, id).await?;
         write_audit(
@@ -3930,6 +3948,146 @@ impl Store for SqlStore {
         .await?;
         tx.commit().await?;
         Ok(after)
+    }
+
+    async fn save_invoice(
+        &self,
+        ctx: &WriteContext,
+        mut input: InvoiceInput,
+    ) -> Result<Vec<CalibrationRecord>> {
+        input.normalize()?;
+        let mut tx = self.begin().await?;
+        let provider = fetch_lookup(&mut tx, LookupKind::Provider, input.provider_id).await?;
+        if provider.is_internal == Some(true) {
+            return Err(Error::validation(
+                "provider_id",
+                format!(
+                    "{} is an internal provider. Invoices are recorded for outside vendors.",
+                    provider.name
+                ),
+            ));
+        }
+        let number = input.invoice_number.clone();
+        let on_it_now: Vec<Id> = tx
+            .fetch_all(
+                "SELECT id FROM calibration_records WHERE provider_id = ?1 AND invoice_number = ?2",
+                params![input.provider_id, &number],
+            )
+            .await?
+            .iter()
+            .map(|r| r.get("id"))
+            .collect::<Result<_>>()?;
+        if input.lines.is_empty() && on_it_now.is_empty() {
+            return Err(Error::validation(
+                "lines",
+                "Select the service records this invoice bills.",
+            ));
+        }
+        let audited = WriteContext::new(ctx.actor.clone(), Some(format!("Invoice {number}")));
+
+        for line in &input.lines {
+            let before = fetch_calibration(&mut tx, line.calibration_id).await?;
+            let what = format!("{} on {}", before.asset_tag, before.cal_date);
+            if before.calibrated_by != Some(CalibratedBy::Provider)
+                || before.calibrated_by_id != Some(input.provider_id)
+            {
+                return Err(Error::validation(
+                    "lines",
+                    format!(
+                        "The service of {what} wasn't performed by {}.",
+                        provider.name
+                    ),
+                ));
+            }
+            if before.is_archived {
+                return Err(Error::validation(
+                    "lines",
+                    format!("The service record of {what} is archived."),
+                ));
+            }
+            if let Some(other) = before.invoice_number.as_deref().filter(|n| *n != number) {
+                return Err(Error::Conflict(format!(
+                    "The service of {what} is already on invoice {other}. Take it off that invoice first."
+                )));
+            }
+            if before.row_version != line.expected_version {
+                return Err(Error::stale("calibration record"));
+            }
+            if before.invoice_number.as_deref() == Some(number.as_str())
+                && before.invoice_line == Some(line.line)
+                && before.invoice_date == Some(input.invoice_date)
+                && before.cost_cents == Some(line.cost_cents)
+            {
+                continue;
+            }
+            tx.execute(
+                "UPDATE calibration_records SET
+                    invoice_number = ?2, invoice_line = ?3, invoice_date = ?4, cost_cents = ?5,
+                    updated_at = ?6, row_version = row_version + 1
+                 WHERE id = ?1",
+                params![
+                    line.calibration_id,
+                    &number,
+                    line.line,
+                    input.invoice_date,
+                    line.cost_cents,
+                    now()
+                ],
+            )
+            .await?;
+            let after = fetch_calibration(&mut tx, line.calibration_id).await?;
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(&audited, AuditAction::Update, AuditEntity::Calibration)
+                    .subject(after.id, what)
+                    .asset(after.asset_id)
+                    .changes(diff(
+                        &calibration_snapshot(&before),
+                        &calibration_snapshot(&after),
+                    )),
+            )
+            .await?;
+        }
+
+        for id in on_it_now {
+            if input.lines.iter().any(|l| l.calibration_id == id) {
+                continue;
+            }
+            let before = fetch_calibration(&mut tx, id).await?;
+            tx.execute(
+                "UPDATE calibration_records SET
+                    invoice_number = NULL, invoice_line = NULL, invoice_date = NULL,
+                    updated_at = ?2, row_version = row_version + 1
+                 WHERE id = ?1",
+                params![id, now()],
+            )
+            .await?;
+            let after = fetch_calibration(&mut tx, id).await?;
+            write_audit(
+                &mut tx,
+                NewAuditEntry::by(&audited, AuditAction::Update, AuditEntity::Calibration)
+                    .subject(id, format!("{} on {}", after.asset_tag, after.cal_date))
+                    .asset(after.asset_id)
+                    .changes(diff(
+                        &calibration_snapshot(&before),
+                        &calibration_snapshot(&after),
+                    )),
+            )
+            .await?;
+        }
+
+        const SQL: &str = concat!(
+            calibration_select!(),
+            " WHERE r.provider_id = ?1 AND r.invoice_number = ?2 ORDER BY r.invoice_line"
+        );
+        let records = tx
+            .fetch_all(SQL, params![input.provider_id, &number])
+            .await?
+            .iter()
+            .map(map_calibration)
+            .collect::<Result<Vec<_>>>()?;
+        tx.commit().await?;
+        Ok(records)
     }
 
     // --- Moving data between databases -------------------------------------------

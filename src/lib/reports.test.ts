@@ -6,6 +6,8 @@ import {
   daysBetween,
   dueReport,
   historyReport,
+  invoicedReport,
+  invoiceYears,
   isoToday,
   labelData,
   outOfToleranceReport,
@@ -79,6 +81,9 @@ function cal(id: number, assetId: number, date: string, over: Partial<Calibratio
     condition_returned: "pass",
     next_due_date: null,
     notes: null,
+    invoice_number: null,
+    invoice_line: null,
+    invoice_date: null,
     attachment_count: 0,
     is_archived: false,
     row_version: 1,
@@ -197,5 +202,43 @@ describe("labels", () => {
       [3, 4, 5],
     ]);
     expect(paginateLabels([1], 4, 9)[0]).toEqual([null, null, null, 1]);
+  });
+});
+
+describe("invoiced calibrations", () => {
+  const assets = [asset(1, "DMM-1"), asset(2, "DMM-2")];
+  const records = [
+    cal(1, 1, "2026-01-10", { invoice_number: "INV-10", invoice_line: 2, invoice_date: "2026-02-01", cost_cents: 5_000 }),
+    cal(2, 2, "2026-01-11", { invoice_number: "INV-10", invoice_line: 1, invoice_date: "2026-02-01", cost_cents: 7_500 }),
+    cal(3, 1, "2025-12-01", { invoice_number: "INV-9", invoice_line: 1, invoice_date: "2025-12-20" }),
+    cal(4, 2, "2026-03-01"),
+    cal(5, 2, "2026-03-02", {
+      invoice_number: "B-1",
+      invoice_line: 1,
+      invoice_date: "2026-03-05",
+      calibrated_by_id: 2,
+      calibrated_by_name: "Beta Labs",
+    }),
+    cal(6, 1, "2026-03-03", { invoice_number: "INV-11", invoice_line: 1, invoice_date: "2026-03-05", is_archived: true }),
+  ];
+
+  it("lists one vendor's invoices for a year by invoice and line, with a total", () => {
+    const report = invoicedReport(records, assets, 1, 2026, "Acme Labs");
+    expect(report.rows.map((r) => [r[0], r[1], r[3], r[6]])).toEqual([
+      ["Acme Labs", "INV-10", 1, "A2"],
+      ["Acme Labs", "INV-10", 2, "A1"],
+      ["Total", null, null, null],
+    ]);
+    expect(report.rows[2][0]).toBe("Total");
+    expect(report.rows[2][10]).toBe(12_500);
+    expect(report.rowLinks).toEqual([2, 1, null]);
+    expect(report.subtitle).toContain("2 lines on 1 invoice");
+  });
+
+  it("covers every vendor and year when not narrowed, leaving out archived and uninvoiced records", () => {
+    const report = invoicedReport(records, assets, null, null);
+    expect(report.rows.slice(0, -1).map((r) => r[1])).toEqual(["INV-9", "INV-10", "INV-10", "B-1"]);
+    expect(invoiceYears(records)).toEqual([2026, 2025]);
+    expect(invoicedReport(records, assets, 1, 2024).rows).toEqual([]);
   });
 });

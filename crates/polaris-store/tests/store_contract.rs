@@ -221,7 +221,7 @@ async fn fresh_database_is_migrated_and_seeded() {
     let h = harness().await;
     let info = h.store.info().await.unwrap();
     assert_eq!(info.backend, expected_backend());
-    assert_eq!(info.schema_version, 21);
+    assert_eq!(info.schema_version, 22);
     assert_eq!(info.asset_count, 0);
 
     let statuses = h
@@ -1196,6 +1196,192 @@ async fn last_cost_follows_provider_service_and_model() {
         .unwrap()
         .unwrap();
     assert_eq!((last.cost_cents, last.cal_date), (14_000, d(2026, 3, 1)));
+}
+
+fn invoice(
+    provider_id: i64,
+    number: &str,
+    lines: &[(&CalibrationRecord, i32, i64)],
+) -> InvoiceInput {
+    InvoiceInput {
+        provider_id,
+        invoice_number: number.into(),
+        invoice_date: d(2026, 4, 2),
+        lines: lines
+            .iter()
+            .map(|(r, line, cost)| InvoiceLine {
+                calibration_id: r.id,
+                expected_version: r.row_version,
+                line: *line,
+                cost_cents: *cost,
+            })
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn invoices_record_lines_and_prices_on_vendor_service_records() {
+    let h = harness().await;
+    let s = h.store.as_ref();
+    let vendor = provider(s).await;
+    let mut inside = lookup("Our Lab");
+    inside.is_internal = Some(true);
+    let inside = s
+        .create_lookup(&ctx(), LookupKind::Provider, inside)
+        .await
+        .unwrap()
+        .id;
+    let other_vendor = s
+        .create_lookup(&ctx(), LookupKind::Provider, lookup("Second Lab"))
+        .await
+        .unwrap()
+        .id;
+    let a = s
+        .create_asset(&ctx(), asset_input(s, "INV-A", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let b = s
+        .create_asset(&ctx(), asset_input(s, "INV-B", AssetKind::Instrument).await)
+        .await
+        .unwrap();
+    let first = s
+        .create_calibration(&ctx(), cal(a.id, vendor, d(2026, 3, 1)))
+        .await
+        .unwrap();
+    let second = s
+        .create_calibration(&ctx(), cal(b.id, vendor, d(2026, 3, 2)))
+        .await
+        .unwrap();
+    let elsewhere = s
+        .create_calibration(&ctx(), cal(b.id, other_vendor, d(2026, 1, 2)))
+        .await
+        .unwrap();
+    assert_eq!(first.invoice_number, None);
+
+    // Internal providers don't invoice; an invoice needs a number and records.
+    assert!(matches!(
+        s.save_invoice(&ctx(), invoice(inside, "X1", &[])).await,
+        Err(Error::Validation(_))
+    ));
+    assert!(matches!(
+        s.save_invoice(&ctx(), invoice(vendor, "  ", &[(&first, 1, 100)]))
+            .await,
+        Err(Error::Validation(_))
+    ));
+    assert!(matches!(
+        s.save_invoice(&ctx(), invoice(vendor, "INV-1", &[])).await,
+        Err(Error::Validation(_))
+    ));
+    // Line numbers are unique, and only this vendor's records can be on its invoice.
+    assert!(matches!(
+        s.save_invoice(
+            &ctx(),
+            invoice(vendor, "INV-1", &[(&first, 1, 100), (&second, 1, 100)])
+        )
+        .await,
+        Err(Error::Validation(_))
+    ));
+    assert!(matches!(
+        s.save_invoice(&ctx(), invoice(vendor, "INV-1", &[(&elsewhere, 1, 100)]))
+            .await,
+        Err(Error::Validation(_))
+    ));
+
+    // Saving logs the number, date, and line, and the invoiced price becomes the cost.
+    let saved = s
+        .save_invoice(
+            &ctx(),
+            invoice(
+                vendor,
+                " INV-1 ",
+                &[(&second, 1, 13_000), (&first, 2, 12_500)],
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        saved
+            .iter()
+            .map(|r| (r.id, r.invoice_line, r.cost_cents))
+            .collect::<Vec<_>>(),
+        vec![
+            (second.id, Some(1), Some(13_000)),
+            (first.id, Some(2), Some(12_500))
+        ]
+    );
+    assert!(
+        saved
+            .iter()
+            .all(|r| r.invoice_number.as_deref() == Some("INV-1")
+                && r.invoice_date == Some(d(2026, 4, 2)))
+    );
+    // An unchanged line isn't touched (the first one kept its price and version).
+    let first = s.get_calibration(first.id).await.unwrap();
+    assert_eq!(first.row_version, saved[1].row_version);
+    let second = s.get_calibration(second.id).await.unwrap();
+    let history = s
+        .list_audit(&AuditFilter {
+            asset_id: Some(b.id),
+            entity: Some(AuditEntity::Calibration),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let latest = &history[0];
+    assert_eq!(latest.reason.as_deref(), Some("Invoice INV-1"));
+    let cost = latest.changes.iter().find(|c| c.field == "Cost").unwrap();
+    assert_eq!(
+        (cost.old.as_deref(), cost.new.as_deref()),
+        (Some("125.00"), Some("130.00"))
+    );
+    assert!(latest.changes.iter().any(|c| c.field == "Invoice line"));
+
+    // A record on one invoice can't go on another.
+    assert!(matches!(
+        s.save_invoice(&ctx(), invoice(vendor, "INV-2", &[(&first, 1, 1)]))
+            .await,
+        Err(Error::Conflict(_))
+    ));
+    // Stale versions are refused.
+    let stale = CalibrationRecord {
+        row_version: second.row_version - 1,
+        ..second.clone()
+    };
+    assert!(matches!(
+        s.save_invoice(&ctx(), invoice(vendor, "INV-1", &[(&stale, 1, 1)]))
+            .await,
+        Err(Error::Conflict(_))
+    ));
+
+    // Saving the invoice again with fewer records takes the others off it.
+    let saved = s
+        .save_invoice(&ctx(), invoice(vendor, "INV-1", &[(&first, 1, 12_000)]))
+        .await
+        .unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        (saved[0].invoice_line, saved[0].cost_cents),
+        (Some(1), Some(12_000))
+    );
+    let second = s.get_calibration(second.id).await.unwrap();
+    assert_eq!(
+        (
+            second.invoice_number,
+            second.invoice_line,
+            second.invoice_date
+        ),
+        (None, None, None)
+    );
+    assert_eq!(second.cost_cents, Some(13_000), "its price stays");
+
+    // Moving a record to another performer takes it off the invoice.
+    let mut moved = cal(a.id, other_vendor, d(2026, 3, 1));
+    moved.cost_cents = Some(12_000);
+    let first = s
+        .update_calibration(&ctx(), first.id, saved[0].row_version, moved)
+        .await
+        .unwrap();
+    assert_eq!(first.invoice_number, None);
 }
 
 #[tokio::test]
@@ -3333,8 +3519,25 @@ async fn populate(store: &dyn Store) {
         .create_calibration(&ctx(), cal(child.id, provider, d(2026, 3, 1)))
         .await
         .unwrap();
-    store
+    let older = store
         .create_calibration(&ctx(), cal(child.id, provider, d(2025, 3, 1)))
+        .await
+        .unwrap();
+    store
+        .save_invoice(
+            &ctx(),
+            InvoiceInput {
+                provider_id: provider,
+                invoice_number: "INV-77".into(),
+                invoice_date: d(2025, 3, 20),
+                lines: vec![InvoiceLine {
+                    calibration_id: older.id,
+                    expected_version: older.row_version,
+                    line: 3,
+                    cost_cents: 13_250,
+                }],
+            },
+        )
         .await
         .unwrap();
     store

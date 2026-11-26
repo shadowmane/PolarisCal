@@ -164,7 +164,7 @@ which may repeat), `TRUE`/`FALSE`, `LOWER()` for case-insensitive comparison, an
 
 | Backend | Driver | Schema | Windows login |
 |---|---|---|---|
-| SQLite | sqlx | `migrations/sqlite` (versions 1 to 21) | n/a (a file) |
+| SQLite | sqlx | `migrations/sqlite` (versions 1 to 22) | n/a (a file) |
 | PostgreSQL 12+ | sqlx | `migrations/postgres` (5 onward) | No. Use a database account; a blank password falls back to the user's `pgpass.conf`. |
 | MySQL 8 / MariaDB 10.5+ | sqlx | `migrations/mysql` (5 onward) | No. Use a database account. |
 | SQL Server 2016+ / Azure SQL | tiberius | `migrations/mssql` (5 onward), run by PolarisCal's own migrator | **Yes** (SSPI: each person's own Windows account, no stored password) |
@@ -253,6 +253,19 @@ Calibration records are called **service records** in the app (the table is stil
 "Counts as a calibration" switch decides whether the record moves the item's schedule. Costs are
 shown with the organization's **currency symbol** (Settings; $ by default), in the app, reports, and
 Excel exports. The symbol is display only; amounts are never converted.
+
+### Billing
+
+The **Billing** page (Technicians and Administrators) lists the service records of every outside
+vendor (a calibration provider not marked Internal), a section per vendor, with what is and isn't
+invoiced. **Enter invoice** takes the invoice number and date, the vendor's records it bills (only
+those not on another invoice), each one's line number, and the invoiced prices, shown against the
+recorded costs. Saving (`save_invoice`, schema 22: `invoice_number`, `invoice_line`, and
+`invoice_date` on `calibration_records`) logs the invoice on those records and sets their cost to
+the invoiced price, audited with the reason "Invoice <number>". An invoice is identified by vendor
+and number: typing the number of one that's already entered (or clicking it in the list) opens it,
+and saving it again with fewer records takes the others off it. A record whose performer is changed
+to someone else comes off its invoice.
 
 ### Calibration extensions
 
@@ -378,6 +391,8 @@ Reservations count the same things.
 * **Out of tolerance**: calibrations in a date range where the item arrived out of tolerance or
   inoperative, with how it was returned, for impact assessments.
 * **Instrument register**: every item with its identity, assignment, status, and schedule.
+* **Invoiced calibrations**: service records on outside vendors' invoices, by vendor, invoice, and
+  line, for one vendor or all and one year (of the invoice date) or all, with a total.
 * **Calibration history**: one item's calibrations (from its page, "Print or export").
 
 **Export to Excel** writes a real `.xlsx` (via `rust_xlsxwriter`): dates as Excel dates, money as

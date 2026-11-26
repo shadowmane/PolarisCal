@@ -80,6 +80,7 @@ pub fn run() {
             commands::create_calibration,
             commands::update_calibration,
             commands::set_calibration_archived,
+            commands::save_invoice,
             commands::due_summary,
             commands::list_attachments,
             commands::add_attachments,

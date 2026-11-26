@@ -9,9 +9,9 @@ use crate::certificate::{
 use crate::model::AuditAction;
 use crate::model::{
     AppSettings, Asset, AssetFilter, AssetInput, Attachment, AttachmentFilter, CalibrationFilter,
-    CalibrationInput, CalibrationRecord, LastCost, LookupInput, LookupItem, LookupKind,
-    NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, Reservation, ReservationCheck,
-    ReservationFilter, StoreInfo,
+    CalibrationInput, CalibrationRecord, InvoiceInput, LastCost, LookupInput, LookupItem,
+    LookupKind, NewAttachment, OwnerChange, OwnerRequest, OwnerRequestFilter, Reservation,
+    ReservationCheck, ReservationFilter, StoreInfo,
 };
 use crate::transfer::{DataSet, TableCount};
 use crate::{Id, Result};
@@ -291,6 +291,15 @@ pub trait Store: Send + Sync {
         expected_version: i64,
         archived: bool,
     ) -> Result<CalibrationRecord>;
+    /// Records an outside vendor's invoice: each listed service record (by that vendor, not
+    /// archived, and not on another of its invoices) gets the invoice number, date, and its
+    /// line, and its cost becomes the invoiced price. Records that were on this invoice but
+    /// aren't listed come off it. Returns the records now on the invoice, by line.
+    async fn save_invoice(
+        &self,
+        ctx: &WriteContext,
+        input: InvoiceInput,
+    ) -> Result<Vec<CalibrationRecord>>;
 
     // --- Certificates --------------------------------------------------------------
 

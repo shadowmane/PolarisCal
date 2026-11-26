@@ -6,7 +6,7 @@ import type { CalibrationRecord } from "../bindings/CalibrationRecord";
 import type { ColumnKind } from "../bindings/ColumnKind";
 import type { ExportCell } from "../bindings/ExportCell";
 import type { ExportSheet } from "../bindings/ExportSheet";
-import { conditionReceivedMeta, conditionReturnedMeta, formatInterval, formatSchedule } from "./format";
+import { conditionReceivedMeta, conditionReturnedMeta, formatCents, formatInterval, formatSchedule } from "./format";
 
 export interface ReportColumn {
   header: string;
@@ -186,6 +186,94 @@ export function outOfToleranceReport(
       ];
     }),
     rowLinks: found.map((c) => c.asset_id),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Invoiced calibrations
+// ---------------------------------------------------------------------------
+
+/** Orders invoiced records by provider, invoice date, invoice number, then line. */
+export function byInvoice(x: CalibrationRecord, y: CalibrationRecord): number {
+  return (
+    (x.calibrated_by_name ?? "").localeCompare(y.calibrated_by_name ?? "") ||
+    (x.invoice_date ?? "").localeCompare(y.invoice_date ?? "") ||
+    (x.invoice_number ?? "").localeCompare(y.invoice_number ?? "", undefined, { numeric: true }) ||
+    (x.invoice_line ?? 0) - (y.invoice_line ?? 0)
+  );
+}
+
+/** The years that have invoices, newest first. */
+export function invoiceYears(calibrations: CalibrationRecord[]): number[] {
+  const years = new Set<number>();
+  for (const c of calibrations) if (c.invoice_number && c.invoice_date) years.add(Number(c.invoice_date.slice(0, 4)));
+  return [...years].sort((a, b) => b - a);
+}
+
+/** Service records billed on outside vendors' invoices, by invoice and line, with a total.
+ * `providerId` and `year` (of the invoice date) narrow it; null means all. */
+export function invoicedReport(
+  calibrations: CalibrationRecord[],
+  assets: Asset[],
+  providerId: number | null,
+  year: number | null,
+  providerName?: string,
+): ReportTable {
+  const byId = new Map(assets.map((a) => [a.id, a]));
+  const found = calibrations
+    .filter(
+      (c) =>
+        !c.is_archived &&
+        c.invoice_number != null &&
+        c.calibrated_by === "provider" &&
+        (providerId == null || c.calibrated_by_id === providerId) &&
+        (year == null || (c.invoice_date ?? "").startsWith(`${year}-`)),
+    )
+    .sort(byInvoice);
+  const total = found.reduce((sum, c) => sum + (c.cost_cents ?? 0), 0);
+  const invoices = new Set(found.map((c) => `${c.calibrated_by_id}|${c.invoice_number}`)).size;
+  const rows: ExportCell[][] = found.map((c) => {
+    const a = byId.get(c.asset_id);
+    return [
+      c.calibrated_by_name,
+      c.invoice_number,
+      t(c.invoice_date),
+      c.invoice_line,
+      c.cal_date,
+      c.service_type_name,
+      c.asset_tag,
+      t(a?.description),
+      t(a ? makeModel(a) : null),
+      t(c.certificate_number),
+      c.cost_cents,
+    ];
+  });
+  if (found.length) rows.push(["Total", null, null, null, null, null, null, null, null, null, total]);
+  return {
+    title: "Invoiced calibrations",
+    subtitle: [
+      providerName ?? "All outside vendors",
+      year == null ? "all years" : String(year),
+      `${found.length} line${found.length === 1 ? "" : "s"} on ${invoices} invoice${invoices === 1 ? "" : "s"}`,
+      found.length ? `total ${formatCents(total)}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    columns: [
+      { header: "Provider", kind: "text", width: 22 },
+      { header: "Invoice", kind: "text", width: 14 },
+      { header: "Invoice date", kind: "date" },
+      { header: "Line", kind: "number", width: 6 },
+      { header: "Service date", kind: "date" },
+      { header: "Service", kind: "text", width: 14 },
+      { header: "Asset tag", kind: "text", width: 14 },
+      { header: "Description", kind: "text", width: 30 },
+      { header: "Make / model", kind: "text", width: 22 },
+      { header: "Certificate", kind: "text", width: 16 },
+      { header: "Price", kind: "money" },
+    ],
+    rows,
+    rowLinks: [...found.map((c) => c.asset_id), ...(found.length ? [null] : [])],
   };
 }
 

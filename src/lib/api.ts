@@ -40,6 +40,7 @@ import type { DueSummary } from "../bindings/DueSummary";
 import type { ErrorKind } from "../bindings/ErrorKind";
 import type { ExportSheet } from "../bindings/ExportSheet";
 import type { FieldError } from "../bindings/FieldError";
+import type { InvoiceInput } from "../bindings/InvoiceInput";
 import type { LastCost } from "../bindings/LastCost";
 import type { LookupInput } from "../bindings/LookupInput";
 import type { LookupItem } from "../bindings/LookupItem";
@@ -206,6 +207,9 @@ export const api = {
       archived,
       reason,
     }),
+
+  /** Billing: puts exactly these service records on an outside vendor's invoice; returns them by line. */
+  saveInvoice: (input: InvoiceInput) => call<CalibrationRecord[]>("save_invoice", { input }),
 
   dueSummary: () => call<DueSummary>("due_summary"),
 

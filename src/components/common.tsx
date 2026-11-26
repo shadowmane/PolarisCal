@@ -44,10 +44,13 @@ export function CollapsibleCard({
   description,
   rememberAs,
   defaultOpen = false,
+  actions,
   children,
 }: {
-  title: string;
+  title: ReactNode;
   description?: ReactNode;
+  /** Buttons beside the header (outside the toggle). */
+  actions?: ReactNode;
   /** A short name for remembering the choice, e.g. "asset-files". */
   rememberAs: string;
   defaultOpen?: boolean;
@@ -68,13 +71,13 @@ export function CollapsibleCard({
   }
   return (
     <Card>
-      <Card.Header className="p-0">
+      <Card.Header className="flex-row items-start gap-3 p-0">
         <button
           type="button"
           aria-expanded={open}
           aria-controls={contentId}
           onClick={toggle}
-          className="-m-1 flex w-[calc(100%+0.5rem)] items-start gap-3 rounded-xl p-1 text-left outline-none hover:bg-default/50 focus-visible:ring-2 focus-visible:ring-accent"
+          className={`-m-1 flex items-start gap-3 ${actions ? "min-w-0 flex-1" : "w-[calc(100%+0.5rem)]"} rounded-xl p-1 text-left outline-none hover:bg-default/50 focus-visible:ring-2 focus-visible:ring-accent`}
         >
           <div className="min-w-0 flex-1">
             <Card.Title>{title}</Card.Title>
@@ -88,6 +91,7 @@ export function CollapsibleCard({
             />
           </span>
         </button>
+        {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </Card.Header>
       {open && <Card.Content id={contentId}>{children}</Card.Content>}
     </Card>
