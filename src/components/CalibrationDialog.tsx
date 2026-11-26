@@ -23,7 +23,7 @@ import { LookupSelect } from "./LookupSelect";
 import { useAsync } from "../lib/useAsync";
 import { AttachmentsPanel, PendingFiles } from "./Attachments";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { DateInput, MoneyInput, NumberInput, SelectInput, TextAreaInput, TextInput } from "./fields";
+import { CheckboxInput, DateInput, MoneyInput, NumberInput, SelectInput, TextAreaInput, TextInput } from "./fields";
 
 /** What saving a record with this outcome asks first. */
 type OutcomePrompt =
@@ -487,22 +487,30 @@ export function CalibrationDialog({
                     error={errors.cost_cents}
                     isDisabled={isExtension}
                   />
-                  {record?.invoice_number ? (
-                    <div className="flex flex-col gap-1 text-sm">
-                      <span className="font-medium">Invoice</span>
-                      <span>
-                        {record.invoice_number} · line {record.invoice_line}
-                        {record.invoice_date && <span className="text-muted"> · {formatDate(record.invoice_date)}</span>}
-                      </span>
-                      <span className="text-xs text-muted">
-                        Entered on the Billing page.
-                        {(form.calibrated_by !== "provider" || form.calibrated_by_id !== record.calibrated_by_id) &&
-                          " Saving with a different performer takes it off this invoice."}
-                      </span>
+                  {/* Set only by entering an invoice on the Billing page; never edited here. */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-end gap-3">
+                      <div className="pb-2.5">
+                        <CheckboxInput label="Invoiced" isSelected={!!record?.invoice_number} onChange={() => {}} isDisabled />
+                      </div>
+                      <TextInput
+                        label="Invoice number"
+                        value={record?.invoice_number ?? ""}
+                        onChange={() => {}}
+                        placeholder="Not invoiced"
+                        isDisabled
+                        className="min-w-0 flex-1"
+                      />
                     </div>
-                  ) : (
-                    <div />
-                  )}
+                    <p className="text-xs text-muted">
+                      {record?.invoice_number
+                        ? `Line ${record.invoice_line}${record.invoice_date ? `, ${formatDate(record.invoice_date)}` : ""}. Set on the Billing page.`
+                        : "Set when an invoice is entered on the Billing page."}
+                      {record?.invoice_number &&
+                        (form.calibrated_by !== "provider" || form.calibrated_by_id !== record.calibrated_by_id) &&
+                        " Saving with a different performer takes it off this invoice."}
+                    </p>
+                  </div>
                   <TextAreaInput
                     label="Notes"
                     value={form.notes}
